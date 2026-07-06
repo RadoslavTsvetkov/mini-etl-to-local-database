@@ -1,0 +1,5 @@
+# Install with: pip install -r requirements-sqlserver.txt
+# Needed only when DB_BACKEND=sqlserver. Requires a SQL Server ODBC driver
+# (17 or 18) to already be installed on the machine -- pyodbc itself is
+# just the Python <-> ODBC bridge.
+pyodbc

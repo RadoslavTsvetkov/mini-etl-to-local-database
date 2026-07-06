@@ -1,0 +1,12 @@
+# Secrets - never commit real credentials
+.env
+
+# Local virtual environment (created by install.bat)
+.venv/
+
+# Local runtime artifacts
+data/*.db
+logs/*.log
+reports/*.html
+__pycache__/
+*.pyc

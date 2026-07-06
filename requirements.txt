@@ -1,0 +1,5 @@
+# Core pipeline (DB_BACKEND=sqlite, the default): no third-party dependencies.
+# Uses only the Python standard library (sqlite3, urllib, json, logging).
+#
+# For the optional SQL Server / SSMS backend (DB_BACKEND=sqlserver), see
+# requirements-sqlserver.txt instead (pip install -r requirements-sqlserver.txt).

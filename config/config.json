@@ -1,0 +1,19 @@
+{
+  "DB_BACKEND": "sqlite",
+  "DB_PATH": "data/etl.db",
+  "SURVEYS_SOURCE_PATH": "data/sample_surveys.json",
+  "LOG_PATH": "logs/etl.log",
+
+  "EXTRACTION_MODE": "file",
+  "COMMAND_MODE": "mock",
+
+  "SHOPMETRICS_BASE_URL": "https://training212.shopmetrics.com",
+  "SHOPMETRICS_CLIENT_OR_FORM_IDS": "-995",
+  "SHOPMETRICS_MAX_RECORDS_PER_RUN": 10,
+
+  "SQLSERVER_DRIVER": "ODBC Driver 18 for SQL Server",
+  "SQLSERVER_SERVER": ".\\SQLEXPRESS",
+  "SQLSERVER_DATABASE": "ShopmetricsETL",
+  "SQLSERVER_TRUSTED_CONNECTION": "yes",
+  "SQLSERVER_TRUST_SERVER_CERTIFICATE": "yes"
+}

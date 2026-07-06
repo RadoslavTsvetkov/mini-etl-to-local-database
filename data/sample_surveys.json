@@ -1,0 +1,57 @@
+[
+  {
+    "survey_id": "125746",
+    "client_or_form_id": "-995",
+    "survey_title": "Q3 Store Visit",
+    "location_store_id": "STR-042",
+    "location_name": "Acme Retail - Downtown",
+    "submitted_at": "2026-06-28T14:32:00Z",
+    "score": 87.5,
+    "campaign": "2026-Q3",
+    "survey_status": "Completed Exported",
+    "attachments_count": 2,
+    "fieldworker_login": "jsmith",
+    "fieldworker_name": "Smith, Jane",
+    "workflow_step_id": 40,
+    "responses": [
+      { "question_id": "1791", "answer_text": "Yes", "comment": "Shelf was fully stocked." },
+      { "question_id": "1792", "answer_text": "No", "comment": "Restroom needed cleaning." }
+    ]
+  },
+  {
+    "survey_id": "125747",
+    "client_or_form_id": "-995",
+    "survey_title": "Q3 Store Visit",
+    "location_store_id": "STR-051",
+    "location_name": "Acme Retail - Uptown",
+    "submitted_at": "2026-06-29T09:10:00Z",
+    "score": 92.0,
+    "campaign": "2026-Q3",
+    "survey_status": "Completed Exported",
+    "attachments_count": 0,
+    "fieldworker_login": "jsmith",
+    "fieldworker_name": "Smith, Jane",
+    "workflow_step_id": 40,
+    "responses": [
+      { "question_id": "1791", "answer_text": "Yes", "comment": "Well stocked and organized." }
+    ]
+  },
+  {
+    "survey_id": "125748",
+    "client_or_form_id": "-995",
+    "survey_title": "Mystery Shop - Checkout Experience",
+    "location_store_id": "STR-042",
+    "location_name": "Acme Retail - Downtown",
+    "submitted_at": "2026-06-29T16:45:00Z",
+    "score": 74.25,
+    "campaign": "2026-Q3",
+    "survey_status": "Completed Exported",
+    "attachments_count": 1,
+    "fieldworker_login": "rdiaz",
+    "fieldworker_name": "Diaz, Rosa",
+    "workflow_step_id": 40,
+    "responses": [
+      { "question_id": "2005", "answer_text": "No", "comment": "Cashier did not greet the shopper." }
+    ]
+  }
+]
