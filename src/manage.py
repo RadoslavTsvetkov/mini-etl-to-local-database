@@ -7,6 +7,9 @@ Usage:
     python manage.py browse surveys --client -995 [--limit N] [--unopened-only]
     python manage.py browse show <survey_id>
     python manage.py dashboard [output_path]
+    python manage.py delete-survey <survey_id> [--yes]
+    python manage.py clear-surveys [--yes --expect-count N]
+    python manage.py serve [--port 8765]
     python manage.py setup-db
 
 Each subcommand is a thin wrapper around the corresponding standalone script
@@ -17,11 +20,15 @@ Each subcommand is a thin wrapper around the corresponding standalone script
 import argparse
 import sys
 
+import backup
 import browse_surveys
 import etl
 import generate_dashboard
+import load
 import view_data
+from colors import BOLD, GREEN, RED, RESET, YELLOW
 from db.setup_db import get_connection
+from logger import get_logger
 
 
 def _db_parent() -> argparse.ArgumentParser:
@@ -65,6 +72,118 @@ def cmd_dashboard(args: argparse.Namespace) -> int:
     return 0
 
 
+def _refresh_dashboard_after_change(args: argparse.Namespace, log_message: str, level: str = "info") -> None:
+    """Shared by delete-survey/clear-surveys: writes an audit-trail line to
+    logs/etl.log (same logger as the ETL pipeline, so it shows up in the
+    same file) and regenerates the dashboard so it reflects the change
+    immediately -- mirrors etl.py's own post-run dashboard refresh."""
+    import config
+
+    logger = get_logger()
+    getattr(logger, level)(log_message)
+    try:
+        path = generate_dashboard.generate()
+        want_open = config.OPEN_DASHBOARD and not getattr(args, "no_open", False)
+        opened = want_open and generate_dashboard.open_in_browser(path)
+        print(f"Dashboard updated{' (opened in your browser)' if opened else ''}: {path}")
+    except Exception as e:
+        print(f"{YELLOW}Could not regenerate the dashboard: {e}{RESET}")
+
+
+def cmd_delete_survey(args: argparse.Namespace) -> int:
+    _apply_db_override(args)
+    conn = get_connection()
+    try:
+        record = load.fetch_survey(conn, args.survey_id)
+        if record is None:
+            print(f"{RED}No survey found with ID {args.survey_id}.{RESET}")
+            return 1
+
+        title = record.get("survey_title") or "(untitled)"
+        location = record.get("location_name") or "(unknown location)"
+        print(f"\n{BOLD}Survey {args.survey_id}{RESET}: {title} — {location}")
+
+        if not args.yes:
+            if not sys.stdin.isatty():
+                print(f"{RED}Refusing to delete without --yes in a non-interactive context.{RESET}")
+                return 1
+            try:
+                answer = input(f"{YELLOW}Delete this survey permanently? Type 'yes' to confirm: {RESET}").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                print(f"\n{RED}Cancelled — nothing deleted.{RESET}")
+                return 1
+            if answer != "yes":
+                print("Cancelled — nothing deleted.")
+                return 1
+
+        backup_path = backup.backup_survey(record)
+        if not load.delete_survey(conn, args.survey_id):
+            print(f"{RED}Survey {args.survey_id} was not found when deleting (already removed?).{RESET}")
+            return 1
+
+        print(f"{GREEN}Deleted survey {args.survey_id}.{RESET} Backup saved to {backup_path}")
+        _refresh_dashboard_after_change(args, f"Deleted survey {args.survey_id} via manage.py delete-survey (backup: {backup_path})")
+        return 0
+    finally:
+        conn.close()
+
+
+def cmd_clear_surveys(args: argparse.Namespace) -> int:
+    _apply_db_override(args)
+    conn = get_connection()
+    try:
+        total = load.count_surveys(conn)
+        if total == 0:
+            print("No surveys in the database — nothing to clear.")
+            return 0
+
+        print(f"\n{BOLD}{RED}This will permanently delete ALL {total:,} surveys from the database.{RESET}")
+        print(f"{RED}A JSON backup is written first, but restoring from it is a manual step —{RESET}")
+        print(f"{RED}this is not undoable from within the app.{RESET}\n")
+
+        if args.yes or args.expect_count is not None:
+            if not args.yes or args.expect_count != total:
+                print(f"{RED}Refusing: clear-surveys in a script needs BOTH --yes and")
+                print(f"--expect-count {total} (the exact current row count) to confirm you")
+                print(f"know what you're about to delete. Got --expect-count={args.expect_count}.{RESET}")
+                return 1
+        else:
+            if not sys.stdin.isatty():
+                print(f"{RED}Refusing to clear all surveys without --yes --expect-count {total} in a non-interactive context.{RESET}")
+                return 1
+            try:
+                count_answer = input(f"Type the number of surveys to confirm ({total}): ").strip()
+                if count_answer != str(total):
+                    print("Cancelled — number didn't match. Nothing deleted.")
+                    return 1
+                phrase_answer = input('Type "DELETE ALL" to confirm: ').strip()
+                if phrase_answer != "DELETE ALL":
+                    print("Cancelled — phrase didn't match. Nothing deleted.")
+                    return 1
+            except (EOFError, KeyboardInterrupt):
+                print(f"\n{RED}Cancelled — nothing deleted.{RESET}")
+                return 1
+
+        records = load.fetch_all_surveys(conn)
+        backup_path = backup.backup_all_surveys(records)
+        deleted = load.clear_all_surveys(conn)
+
+        print(f"{GREEN}Deleted {deleted:,} surveys.{RESET} Backup saved to {backup_path}")
+        _refresh_dashboard_after_change(
+            args, f"Cleared ALL {deleted} surveys via manage.py clear-surveys (backup: {backup_path})", level="warning"
+        )
+        return 0
+    finally:
+        conn.close()
+
+
+def cmd_serve(args: argparse.Namespace) -> int:
+    _apply_db_override(args)
+    import server
+
+    return server.run(port=args.port, no_open=args.no_open)
+
+
 def cmd_setup_db(args: argparse.Namespace) -> int:
     _apply_db_override(args)
     import config
@@ -96,6 +215,29 @@ def build_parser() -> argparse.ArgumentParser:
     p_dash.add_argument("output", nargs="?", default=None, help="Output path (default: reports/dashboard.html)")
     p_dash.add_argument("--no-open", action="store_true", help="Don't open the dashboard in the browser")
     p_dash.set_defaults(func=cmd_dashboard)
+
+    p_del = sub.add_parser("delete-survey", parents=[_db_parent()], help="Permanently delete one survey (backed up to JSON first).")
+    p_del.add_argument("survey_id", help="Survey ID to delete")
+    p_del.add_argument("--yes", action="store_true", help="Skip the interactive confirmation (required in non-interactive contexts)")
+    p_del.add_argument("--no-open", action="store_true", help="Don't open the refreshed dashboard in the browser")
+    p_del.set_defaults(func=cmd_delete_survey)
+
+    p_clear = sub.add_parser(
+        "clear-surveys", parents=[_db_parent()],
+        help="Permanently delete ALL surveys (backed up to JSON first). Requires extra confirmation.",
+    )
+    p_clear.add_argument("--yes", action="store_true", help="Non-interactive confirmation, part 1 of 2 (also requires --expect-count)")
+    p_clear.add_argument("--expect-count", type=int, default=None, help="Non-interactive confirmation, part 2 of 2: must equal the exact current row count")
+    p_clear.add_argument("--no-open", action="store_true", help="Don't open the refreshed dashboard in the browser")
+    p_clear.set_defaults(func=cmd_clear_surveys)
+
+    p_serve = sub.add_parser(
+        "serve", parents=[_db_parent()],
+        help="Serve the dashboard locally (127.0.0.1) with working Delete / Clear-all buttons.",
+    )
+    p_serve.add_argument("--port", type=int, default=8765, help="Local port to listen on (default: 8765)")
+    p_serve.add_argument("--no-open", action="store_true", help="Don't open the dashboard in the browser on start")
+    p_serve.set_defaults(func=cmd_serve)
 
     p_setup = sub.add_parser("setup-db", parents=[_db_parent()], help="Create/verify the database for the current DB_BACKEND.")
     p_setup.set_defaults(func=cmd_setup_db)

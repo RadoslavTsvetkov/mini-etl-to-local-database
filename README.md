@@ -33,11 +33,12 @@ if the saved credentials are **wrong** — every API run verifies them
 upfront, and if Shopmetrics rejects them (mistyped, deactivated, or
 regenerated), you're asked to re-enter them and `.env` is rewritten.
 
-To use the other commands (`view`, `browse`, `dashboard`, `setup-db`, or any
-flag), open a terminal in this folder instead and run `run.bat <command>
-...` — it forwards whatever you type to the actual program (see the
-sections below for the full list). Only the plain double-click (no
-arguments) needs the "press any key" pause; running `run.bat` from an
+To use the other commands (`view`, `browse`, `dashboard`, `serve`,
+`delete-survey`, `clear-surveys`, `setup-db`, or any flag), open a terminal
+in this folder instead and run `run.bat <command> ...` — it forwards
+whatever you type to the actual program (see the sections below for the
+full list). Only the plain double-click (no arguments) needs the "press any
+key" pause; running `run.bat` from an
 already-open terminal behaves like any normal command.
 
 If you're not on Windows, or prefer running Python directly: every example
@@ -140,6 +141,77 @@ and a table of **every** survey in the database. Working with the table:
   counts and percentages.
 
 Supports light and dark mode automatically (follows your OS/browser theme).
+
+A plain double-clicked dashboard file has no server behind it, so its
+**Delete** / **Clear ALL surveys** controls are disabled (you'll see a note
+saying so above the table) — see §2.2 to actually remove data, either from
+the dashboard itself (via `run.bat serve`) or from the command line.
+
+## 2.2 Removing surveys from the database
+
+Two ways to permanently delete survey data — both take a JSON backup first
+(in `data/backups/`) and both refresh the dashboard automatically afterward.
+**Neither of these touches anything on the Shopmetrics side** — they only
+remove rows from *your local database* (SQLite or SQL Server, whichever
+`--db`/`DB_BACKEND` currently points at); if you extract again with
+`--mode api`, a deleted survey that's still unopened on your Shopmetrics
+account will simply be re-downloaded, since extraction is keyed off
+Shopmetrics' own opened/unopened flag, not your local database's contents.
+
+### Command line (always available)
+
+```
+run.bat delete-survey 10656
+```
+Shows the survey's title/location, then asks you to type `yes` to confirm.
+Skip the prompt in a script with `--yes` (still writes the backup first).
+
+```
+run.bat clear-surveys
+```
+**Deletes every survey in the database.** Because this is destructive and
+hard to undo, it asks for **two** separate confirmations, not one:
+1. Type the *exact number* of surveys shown (e.g. `1807`) — a typo-guard
+   that also makes you actually look at how many rows are about to go.
+2. Type `DELETE ALL` (exact capitals).
+
+Only after both match does it back up every row to JSON and delete them.
+Get either one wrong (or just press Enter) and nothing is deleted. In a
+script, replace both prompts with two flags that must both be correct:
+`run.bat clear-surveys --yes --expect-count 1807` — get the count wrong and
+it refuses, so a stale/copy-pasted command can't nuke a database that's
+since grown or shrunk.
+
+### From the dashboard itself (`run.bat serve`)
+
+A dashboard opened as a plain file can't write to the database — there's no
+server behind a `.html` file for it to talk to. `run.bat serve` (or
+`python src/manage.py serve`) fixes that by serving the same dashboard over
+a small local web server, which turns on real, working **Delete** (in the
+survey Details view) and **Clear ALL surveys…** (above the survey table)
+buttons:
+
+```
+run.bat serve
+```
+Opens `http://127.0.0.1:8765/` in your browser (use `--port` to pick a
+different port). Clicking **Delete** asks for confirmation once; clicking
+**Clear ALL surveys…** asks for confirmation *and* makes you type
+`DELETE ALL` into a prompt before anything happens — same two-step
+seriousness as the command line, just via browser dialogs instead of a
+console. Either action backs up first, deletes, regenerates the dashboard,
+and takes you straight to the fresh (now-updated) report. Press `Ctrl+C` in
+the console to stop serving — it doesn't run unless you start it, and it
+only listens on `127.0.0.1` (your machine only, never your network).
+
+### About the backups
+
+Every delete (single or "clear all") writes the full row(s) it's about to
+remove to a timestamped JSON file in `data/backups/` (gitignored, like the
+rest of `data/`) *before* touching the database, and prints the file path.
+Restoring from one isn't a built-in command (re-importing is a manual job:
+the JSON is the same shape as the `surveys` table's columns) — treat the
+backup as an insurance policy for "oops", not an undo button.
 
 ## 3. Using SQL Server / SSMS instead of (or alongside) SQLite
 
@@ -339,3 +411,17 @@ you want the full dataset in both places.
 - **Command API validation errors** (e.g. survey status): these are real
   responses from Shopmetrics' business rules, not bugs — read the message,
   it names the exact constraint that failed.
+- **`clear-surveys` refuses with a count mismatch**: either you typed the
+  wrong number at the prompt, or (in a script) `--expect-count` doesn't
+  match the database's *current* row count — re-run `run.bat view surveys`
+  or just re-run `clear-surveys` to see the current total, then use that
+  exact number. This check exists specifically to stop a stale command from
+  deleting more or less than you think.
+- **Dashboard's Delete / Clear-all buttons are grayed out with a note about
+  `manage.py serve`**: expected — a dashboard opened as a plain file has no
+  server behind it to write to the database. Run `run.bat serve` instead
+  (§2.2) and use the copy of the dashboard it opens for you.
+- **"Missing or invalid dashboard token" from `run.bat serve`**: the page
+  you're clicking Delete/Clear-all on is stale (from a previous `serve`
+  session, or you reloaded a URL after restarting `serve`, which mints a new
+  token each time). Reload the page at `http://127.0.0.1:8765/` and retry.

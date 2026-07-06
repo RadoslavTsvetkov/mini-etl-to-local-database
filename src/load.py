@@ -96,3 +96,42 @@ def mark_open_error(conn, survey_id: str, error_message: str) -> None:
         (error_message, survey_id),
     )
     conn.commit()
+
+
+def count_surveys(conn) -> int:
+    return conn.execute("SELECT COUNT(*) FROM surveys").fetchone()[0]
+
+
+def fetch_survey(conn, survey_id: str) -> dict | None:
+    """Fetches one full survey row as a dict (all columns), for confirmation
+    prompts and backups. Portable across sqlite3/pyodbc: neither guarantees
+    dict-like rows, so columns come from cursor.description."""
+    cursor = conn.execute("SELECT * FROM surveys WHERE survey_id = ?", (survey_id,))
+    row = cursor.fetchone()
+    if row is None:
+        return None
+    columns = [d[0] for d in cursor.description]
+    return dict(zip(columns, row))
+
+
+def fetch_all_surveys(conn) -> list[dict]:
+    """Fetches every survey row as a list of dicts, for backups before a
+    bulk delete. See fetch_survey for the portability note."""
+    cursor = conn.execute("SELECT * FROM surveys")
+    columns = [d[0] for d in cursor.description]
+    return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+
+def delete_survey(conn, survey_id: str) -> bool:
+    """Deletes one survey by ID. Returns True if a row was actually deleted."""
+    cursor = conn.execute("DELETE FROM surveys WHERE survey_id = ?", (survey_id,))
+    conn.commit()
+    return cursor.rowcount == 1
+
+
+def clear_all_surveys(conn) -> int:
+    """Deletes every row from the surveys table. Returns the number of rows
+    deleted. Caller is responsible for backing up first -- see backup.py."""
+    cursor = conn.execute("DELETE FROM surveys")
+    conn.commit()
+    return cursor.rowcount

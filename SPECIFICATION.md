@@ -47,6 +47,7 @@ Everything below is taken from `_KNOWLEDGEBASE/023-APIs/`, not invented. Article
 | Configuration format | Split in two: **`config/config.json`** (checked into git) holds all non-secret settings and defaults; **`.env`** (gitignored) holds secrets (API credentials) and any ad-hoc local overrides. See §7. |
 | Distribution / setup | Two `.bat` files at the repo root: `install.bat` (one-time: creates a `.venv`, installs dependencies, seeds `.env` from the template) and `run.bat` (forwards to `manage.py`; bare `run.bat` with no args scrapes the live API, prompting once for credentials if `.env` is empty, then generates the next numbered dashboard and opens it in the browser). Goal: clone the repo on any Windows machine with Python 3.10+, run `install.bat` once, then `run.bat` — no manual Python/pip steps, no manual `.env` editing (the credentials prompt fills it). See §4.2. |
 | Source layout | All Python modules live under `src/` (with `src/db/` as the database-access sub-package), separate from `config/` (JSON config), `data/` (sample input + generated SQLite file), `logs/`, and `reports/` (generated dashboard). See §4.1. |
+| Deleting data | Two CLI commands (`delete-survey`, `clear-surveys`) mutate the active backend directly; `clear-surveys` requires deliberately heavier confirmation than everything else in this project, matching how destructive and rare it is. Both back up to JSON first. Since a static dashboard file has no server to write to, the dashboard's own Delete/Clear-all buttons only work under a new opt-in local server (`manage.py serve`, 127.0.0.1-only, token-gated). See §12. |
 
 ## 4. Project Structure
 
@@ -70,11 +71,13 @@ specification/                        (repo root)
 │   └── config.json                   # All non-secret configuration (checked into git) -- see §7.1
 │
 ├── src/                               # All Python source code
-│   ├── manage.py                      # Single CLI entry point: run / view / browse / dashboard / setup-db
+│   ├── manage.py                      # Single CLI entry point: run / view / browse / dashboard / delete-survey / clear-surveys / serve / setup-db
 │   ├── etl.py                          # ETL pipeline orchestration (also runnable directly, with CLI flags)
 │   ├── extract.py                      # Extraction step (file or live Query API)
-│   ├── load.py                         # Load step (dedup + insert), portable across DB backends
+│   ├── load.py                         # Load/delete/clear step (dedup + insert + delete), portable across DB backends
 │   ├── api_client.py                   # Auth + Query API + Command API client
+│   ├── backup.py                        # JSON backups written before delete-survey / clear-surveys -- see §12
+│   ├── server.py                        # Local-only (127.0.0.1) web server behind `manage.py serve` -- see §12.3
 │   ├── browse_surveys.py                # Read-only CLI to explore live Shopmetrics data directly
 │   ├── view_data.py                      # Readable, color-highlighted CLI view of collected data
 │   ├── generate_dashboard.py              # Generates the self-contained HTML dashboard
@@ -89,7 +92,8 @@ specification/                        (repo root)
 │
 ├── data/
 │   ├── sample_surveys.json            # Sample/mock survey records (file mode input)
-│   └── etl.db                          # Generated SQLite database (DB_BACKEND=sqlite; created at runtime)
+│   ├── etl.db                          # Generated SQLite database (DB_BACKEND=sqlite; created at runtime)
+│   └── backups/                        # JSON backups written before any delete-survey/clear-surveys (gitignored) -- see §12
 │
 ├── logs/
 │   └── etl.log                         # Append-only run log (created at runtime)
@@ -411,3 +415,126 @@ The full `_KNOWLEDGEBASE/023-APIs/` tree (62 articles) has been read at least on
 - **1 correction verified live, and it fails**: §10.3 — `BulkProcessing_SetReadStatus` was tested against the real account and returns HTTP 500, likely deprecated on this platform version. `COMMAND_MODE=live` should be treated as non-functional until Shopmetrics confirms a current replacement.
 - **1 open item still unresolved**: §10.4 (answer-selection extraction gap), blocked on Operations-domain access this account doesn't have.
 - Not read in full (skimmed/skipped as not relevant to this project): Countries/Currencies/Language Locales/State-Regions/Time Zones query resources.
+
+## 12. Deleting Survey Data
+
+Purely a **local database** feature — none of this calls the Shopmetrics API.
+Deleting a survey from `surveys` never changes anything on the Shopmetrics
+side; it only removes the local copy. (Consequence: if the survey is still
+unopened on Shopmetrics and you extract again with `--mode api`, it comes
+back — extraction is keyed off Shopmetrics' own opened/unopened flag, not
+what's in this database.)
+
+### 12.1 DB-layer functions (`load.py`)
+
+Added alongside the existing insert/update helpers, portable across both
+backends via the same `?`-placeholder style already used throughout
+`load.py`:
+
+| Function | Purpose |
+|---|---|
+| `count_surveys(conn)` | `SELECT COUNT(*)` — used to display/verify totals before a destructive op. |
+| `fetch_survey(conn, survey_id)` | One full row as a `dict` (columns from `cursor.description`, not `sqlite3.Row`, so it works identically against `pyodbc` rows) — used for the pre-delete confirmation prompt and single-survey backup. |
+| `fetch_all_surveys(conn)` | Every row as a list of `dict`s — used for the pre-`clear-surveys` backup. |
+| `delete_survey(conn, survey_id)` | `DELETE FROM surveys WHERE survey_id = ?`; returns whether a row was actually removed. |
+| `clear_all_surveys(conn)` | `DELETE FROM surveys` (no `WHERE`); returns the row count deleted. |
+
+### 12.2 Backups (`backup.py`)
+
+Every delete path backs up what it's about to remove to JSON **before**
+deleting, unconditionally (no flag disables this):
+
+- `backup_survey(record)` → `data/backups/survey_<id>_deleted_<UTC timestamp>.json`
+- `backup_all_surveys(records)` → `data/backups/all_surveys_backup_<UTC timestamp>.json`
+
+`data/backups/` is gitignored (`.gitignore`). There is no restore command —
+re-importing a backup is a manual job (the JSON shape matches the `surveys`
+columns 1:1) — the backup is an insurance policy, not an undo button.
+
+### 12.3 CLI commands (`manage.py`)
+
+**`delete-survey <id> [--yes] [--db ...] [--no-open]`** (`cmd_delete_survey`):
+looks the survey up first (shows title/location so the confirmation isn't
+blind), asks for a typed `yes` unless `--yes` is passed, refuses outright in
+a non-interactive shell without `--yes`, then backs up, deletes, logs a
+`logger.info` line, and regenerates the dashboard.
+
+**`clear-surveys [--yes --expect-count N] [--db ...] [--no-open]`**
+(`cmd_clear_surveys`) — deliberately the most heavily-gated action in the
+whole project:
+
+- Interactive: two separate prompts, not one — first the *exact current row
+  count* typed back (a database with 1,807 rows requires typing `1807`),
+  then the literal phrase `DELETE ALL`. Either one wrong (or blank) aborts
+  with nothing deleted.
+- Non-interactive (scripted): requires **both** `--yes` and
+  `--expect-count N`, where `N` must equal the row count *at the moment the
+  command runs* — a copy-pasted command against a database that's since
+  grown or shrunk is refused rather than silently deleting the wrong number
+  of rows.
+- Either path: backs up every row, deletes, logs a `logger.warning` line
+  (warning, not info — this is the one operation in the project loud enough
+  in `logs/etl.log` to warrant it), and regenerates the dashboard.
+
+Both commands reuse `_refresh_dashboard_after_change()`, which mirrors
+`etl.py`'s own post-run dashboard regeneration (§6.5 step 7) — same
+`OPEN_DASHBOARD`/`--no-open` behavior, same "Dashboard updated: `<path>`"
+style output.
+
+### 12.4 Live dashboard actions (`manage.py serve` / `server.py`)
+
+A dashboard is a static file — opening it doesn't start any code, so its
+Delete/Clear-all buttons have nothing to call by default. `generate_dashboard.generate()`
+takes an optional `server_token` argument; when set, the emitted page embeds
+`window.__DASHBOARD_LIVE__ = true` and the token, and its JS un-hides the
+`.live-only` controls (Delete in the survey Details view; "Clear ALL
+surveys…" above the table) — hidden and replaced by a `.static-only` note
+otherwise. `manage.py serve` is what sets that token.
+
+**Architecture** (`src/server.py`, stdlib `http.server` only, zero
+third-party dependencies):
+
+- `ThreadingHTTPServer` bound to **`127.0.0.1` only** — never reachable
+  from the network, regardless of firewall state.
+- `GET /` → 302 redirect to the newest `dashboard<N>.html`
+  (`generate_dashboard.latest_report_filename()`). `GET /<name>` serves that
+  exact file from `reports/` — basename-only matching plus a
+  `realpath().startswith(reports_dir)` check blocks path traversal even
+  from a pre-encoded `..%2f` attempt (verified: a raw `../` is normalized
+  away by the HTTP client itself before it reaches the server, so the
+  encoded form is the meaningful test — confirmed **403**).
+- `POST /api/delete-survey` `{"survey_id": "..."}` and
+  `POST /api/clear-surveys` `{"confirm": "DELETE ALL", "expected_count": N}`
+  — both require the header `X-Dashboard-Token` to equal the server's
+  in-memory token (generated fresh via `secrets.token_hex(16)` each time
+  `serve` starts) or the request is rejected with **403** before anything
+  else is checked. `clear-surveys`' `expected_count` is re-validated against
+  the database's actual current count server-side (not just trusted from
+  the browser) — a 409 if it doesn't match, same "stale count" protection
+  as the CLI's `--expect-count`.
+- Why the token matters even though the server is localhost-only: any other
+  site open in another browser tab *can* fire a same-origin-policy-exempt
+  `fetch()` at `http://127.0.0.1:<port>/api/...` (the classic CSRF shape —
+  the browser will attempt the request even cross-origin; SOP only stops
+  the attacker from *reading the response*, not from sending it). Because
+  the token lives inside this page's own DOM and SOP blocks other origins
+  from reading that DOM, they cannot learn the token to attach it, so their
+  forged request is rejected at the 403 check. This is the whole reason a
+  request body flag alone (`confirm`/`expected_count`) wouldn't have been
+  enough on its own.
+- Both endpoints reuse the exact same `load.py`/`backup.py` functions as the
+  CLI commands (§12.1/§12.2) — no separate deletion logic to keep in sync.
+  On success, each regenerates the dashboard (same token, so the new page
+  is live too) and responds `{"ok": true, "redirect": "/dashboard<N+1>.html"}`;
+  the page's JS navigates there, so the browser lands on a dashboard that
+  already reflects the change.
+- Verified end-to-end against a disposable copy of the database (never the
+  real `data/etl.db`): delete-by-ID removes exactly that row; a wrong
+  `X-Dashboard-Token` is rejected with 403; `clear-surveys` with a
+  deliberately wrong `expected_count` is rejected with 409 and deletes
+  nothing; with the correct count it empties the table and writes the
+  all-rows backup.
+- `run.bat serve` needs no changes to `run.bat` itself — the existing
+  argument pass-through branch already forwards any subcommand verbatim to
+  `manage.py`, so `run.bat serve`, `run.bat delete-survey <id>`, and
+  `run.bat clear-surveys` all just work.

@@ -27,16 +27,27 @@ from db.setup_db import get_connection
 REPORTS_DIR = os.path.join(config.PROJECT_ROOT, "reports")
 
 
-def next_output_path() -> str:
-    """Reports are numbered and never overwritten: dashboard1.html,
-    dashboard2.html, ... — each generation writes the next free number."""
+def _highest_report_number() -> int:
     highest = 0
     if os.path.isdir(REPORTS_DIR):
         for name in os.listdir(REPORTS_DIR):
             m = re.fullmatch(r"dashboard(\d+)\.html", name, re.IGNORECASE)
             if m:
                 highest = max(highest, int(m.group(1)))
-    return os.path.join(REPORTS_DIR, f"dashboard{highest + 1}.html")
+    return highest
+
+
+def next_output_path() -> str:
+    """Reports are numbered and never overwritten: dashboard1.html,
+    dashboard2.html, ... — each generation writes the next free number."""
+    return os.path.join(REPORTS_DIR, f"dashboard{_highest_report_number() + 1}.html")
+
+
+def latest_report_filename() -> str | None:
+    """The newest existing dashboard<N>.html, or None if reports/ is empty.
+    Used by `manage.py serve` (src/server.py) to know what to redirect '/' to."""
+    highest = _highest_report_number()
+    return f"dashboard{highest}.html" if highest else None
 
 
 def _top_n(sql: str, n: int) -> str:
@@ -363,6 +374,9 @@ _STYLE = """
     padding: 2px 10px; cursor: pointer;
   }
   .btn:hover { background: var(--row-hover); border-color: var(--series-1); }
+  .btn-danger { color: var(--bad); border-color: var(--bad); }
+  .btn-danger:hover { background: var(--bad-bg); border-color: var(--bad); }
+  .btn-danger:disabled { opacity: 0.5; cursor: default; }
   #modal-backdrop {
     position: fixed; inset: 0; background: rgba(0,0,0,0.45); z-index: 20; display: none;
   }
@@ -430,6 +444,7 @@ _SCRIPT = """
         <button id="modal-prev" aria-label="Previous survey" title="Previous survey (&#8592;)">&#8249;</button>
         <button id="modal-next" aria-label="Next survey" title="Next survey (&#8594;)">&#8250;</button>
       </div>
+      <button id="modal-delete" class="btn btn-danger live-only" style="display:none" title="Permanently delete this survey">Delete</button>
       <button id="modal-close" aria-label="Close">&#10005;</button>
     </div>
     <div id="modal-body"></div>
@@ -437,6 +452,27 @@ _SCRIPT = """
 </div>
 <script>
 (function () {
+  /* Delete / Clear-all only work when served by `manage.py serve` (there's
+     a real server behind the page to change the database); a plain
+     double-clicked file has no such backend. Toggle the two states first,
+     before anything else, so there's no flash of the wrong controls. */
+  var isLive = !!window.__DASHBOARD_LIVE__;
+  document.querySelectorAll(".live-only").forEach(function (n) { n.style.display = isLive ? "" : "none"; });
+  document.querySelectorAll(".static-only").forEach(function (n) { n.style.display = isLive ? "none" : ""; });
+
+  function apiPost(url, body) {
+    return fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Dashboard-Token": window.__DASHBOARD_TOKEN__ || "" },
+      body: JSON.stringify(body)
+    }).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (data) {
+        if (!r.ok || !data.ok) throw new Error(data.error || ("Request failed (HTTP " + r.status + ")"));
+        return data;
+      });
+    });
+  }
+
   var tip = document.getElementById("tip");
   var tipV = tip.querySelector(".tip-v");
   var tipL = tip.querySelector(".tip-l");
@@ -577,9 +613,12 @@ _SCRIPT = """
   }
 
 
+  var currentSid = null;
+
   function openModal(sid, keepNav) {
     var d = DETAILS[sid];
     if (!d) return;
+    currentSid = sid;
     if (!keepNav) computeNavList();
     navIdx = navList.indexOf(sid);
     prevBtn.disabled = navIdx <= 0;
@@ -672,6 +711,35 @@ _SCRIPT = """
   }
   prevBtn.addEventListener("click", function () { navStep(-1); });
   nextBtn.addEventListener("click", function () { navStep(1); });
+
+  var deleteBtn = document.getElementById("modal-delete");
+  if (deleteBtn) {
+    deleteBtn.addEventListener("click", function () {
+      if (!currentSid) return;
+      var d = DETAILS[currentSid];
+      var label = currentSid + (d && d.title ? " — " + d.title : "");
+      if (!window.confirm("Permanently delete survey " + label + "?\\n\\nA backup JSON is saved on the server first, but this cannot be undone from the dashboard.")) return;
+      deleteBtn.disabled = true;
+      apiPost("/api/delete-survey", { survey_id: currentSid })
+        .then(function (data) { window.location = data.redirect || "/"; })
+        .catch(function (e) { window.alert("Delete failed: " + e.message); deleteBtn.disabled = false; });
+    });
+  }
+
+  var clearAllBtn = document.getElementById("clear-all-btn");
+  if (clearAllBtn) {
+    clearAllBtn.addEventListener("click", function () {
+      var total = Object.keys(DETAILS).length;
+      if (!window.confirm("Permanently delete ALL " + total.toLocaleString() + " surveys?\\n\\nA backup JSON is saved on the server first, but this cannot be undone from the dashboard. This is a big deal — make sure you mean it.")) return;
+      var typed = window.prompt('Type DELETE ALL (exact capitals) to confirm deleting all ' + total.toLocaleString() + ' surveys:');
+      if (typed !== "DELETE ALL") { window.alert("Cancelled — text didn't match \\"DELETE ALL\\" exactly. Nothing was deleted."); return; }
+      clearAllBtn.disabled = true;
+      apiPost("/api/clear-surveys", { confirm: "DELETE ALL", expected_count: total })
+        .then(function (data) { window.location = data.redirect || "/"; })
+        .catch(function (e) { window.alert("Clear failed: " + e.message); clearAllBtn.disabled = false; });
+    });
+  }
+
   closeBtn.addEventListener("click", closeModal);
   backdrop.addEventListener("click", function (e) { if (e.target === backdrop) closeModal(); });
   document.addEventListener("keydown", function (e) {
@@ -743,6 +811,9 @@ def render_html(data: dict) -> str:
     def shown(n_shown, n_distinct):
         return f' <span class="count">· top {n_shown} of {n_distinct}</span>' if n_distinct > n_shown else ""
 
+    is_live = "true" if data.get("server_token") else "false"
+    live_token_json = json.dumps(data.get("server_token") or "")
+
     return f"""<meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Survey ETL Dashboard</title>
@@ -794,6 +865,8 @@ def render_html(data: dict) -> str:
       <button class="seg-btn" data-filter="no">Not opened</button>
     </div>
     <span id="search-count" class="count"></span>
+    <button id="clear-all-btn" class="btn btn-danger live-only" style="display:none">Clear ALL surveys…</button>
+    <span class="count static-only">Delete &amp; Clear-all need <code>manage.py serve</code> — see README</span>
   </div>
   <div class="table-wrap">
   <table class="sortable">
@@ -808,17 +881,24 @@ def render_html(data: dict) -> str:
 </footer>
 </div>
 <script id="survey-data" type="application/json">{details_json}</script>
+<script>window.__DASHBOARD_LIVE__={is_live};window.__DASHBOARD_TOKEN__={live_token_json};</script>
 {_SCRIPT}
 """
 
 
-def generate(output_path: str = None) -> str:
+def generate(output_path: str = None, server_token: str = None) -> str:
+    """server_token: set only by `manage.py serve` (src/server.py). Its
+    presence is what turns on the dashboard's real Delete / Clear-all
+    buttons -- a plain `generate()` call (the default for `run`/`dashboard`)
+    produces a static file with those actions disabled, since there's no
+    server behind it to actually change the database."""
     output_path = output_path or next_output_path()
     conn = get_connection()
     try:
         data = build_data(conn)
     finally:
         conn.close()
+    data["server_token"] = server_token
 
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     with open(output_path, "w", encoding="utf-8") as f:

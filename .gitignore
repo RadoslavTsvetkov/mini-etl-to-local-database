@@ -6,6 +6,7 @@
 
 # Local runtime artifacts
 data/*.db
+data/backups/
 logs/*.log
 reports/*.html
 __pycache__/
