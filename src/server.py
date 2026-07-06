@@ -87,6 +87,63 @@ def _handle_clear_surveys(body: dict) -> dict:
     return {"ok": True, "redirect": "/" + os.path.basename(new_path)}
 
 
+def _build_filter_or_error(filters) -> tuple:
+    if not isinstance(filters, dict) or not any(v not in (None, "", []) for v in filters.values()):
+        raise ApiError(400, "No filters provided — that would match every survey.")
+    try:
+        return load.build_survey_filter(filters)
+    except load.FilterError as e:
+        raise ApiError(400, str(e))
+
+
+def _handle_preview_filtered(body: dict) -> dict:
+    where_sql, params = _build_filter_or_error(body.get("filters"))
+    conn = get_connection()
+    try:
+        total = load.count_matching_surveys(conn, where_sql, params)
+        preview = load.preview_matching_surveys(conn, where_sql, params, limit=10)
+    finally:
+        conn.close()
+    return {
+        "ok": True,
+        "total": total,
+        "preview": [
+            {
+                "survey_id": r["survey_id"],
+                "title": r.get("survey_title"),
+                "location": r.get("location_name"),
+                "date": r.get("submitted_at"),
+            }
+            for r in preview
+        ],
+    }
+
+
+def _handle_delete_filtered(body: dict) -> dict:
+    where_sql, params = _build_filter_or_error(body.get("filters"))
+    expected_count = body.get("expected_count")
+
+    conn = get_connection()
+    try:
+        actual = load.count_matching_surveys(conn, where_sql, params)
+        if actual == 0:
+            raise ApiError(409, "No surveys match these filters anymore — reload and try again.")
+        if not isinstance(expected_count, int) or expected_count != actual:
+            raise ApiError(409, f"Match count changed (now {actual}) — reload the dashboard and try again.")
+        records = load.fetch_matching_surveys(conn, where_sql, params)
+        backup_path = backup.backup_filtered_surveys(records)
+        deleted = load.delete_matching_surveys(conn, where_sql, params)
+    finally:
+        conn.close()
+
+    logger.warning(
+        "Deleted %d surveys via manage.py serve web UI filters=%s (backup: %s)",
+        deleted, body.get("filters"), backup_path,
+    )
+    new_path = generate_dashboard.generate(server_token=TOKEN)
+    return {"ok": True, "redirect": "/" + os.path.basename(new_path)}
+
+
 class DashboardHandler(BaseHTTPRequestHandler):
     server_version = "ShopmetricsDashboard/1.0"
 
@@ -149,9 +206,17 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
         self._serve_file(path.lstrip("/"))
 
+    ROUTES = {
+        "/api/delete-survey": _handle_delete_survey,
+        "/api/clear-surveys": _handle_clear_surveys,
+        "/api/preview-filtered": _handle_preview_filtered,
+        "/api/delete-filtered": _handle_delete_filtered,
+    }
+
     def do_POST(self) -> None:  # noqa: N802 (stdlib method name)
         path = urllib.parse.urlsplit(self.path).path
-        if path not in ("/api/delete-survey", "/api/clear-surveys"):
+        handler = self.ROUTES.get(path)
+        if handler is None:
             self._send_json(404, {"ok": False, "error": "Unknown endpoint"})
             return
         if self.headers.get("X-Dashboard-Token") != TOKEN:
@@ -160,7 +225,6 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         body = self._read_json_body()
         try:
-            handler = _handle_delete_survey if path == "/api/delete-survey" else _handle_clear_surveys
             self._send_json(200, handler(body))
         except ApiError as e:
             self._send_json(e.status, {"ok": False, "error": str(e)})

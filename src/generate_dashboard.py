@@ -377,16 +377,16 @@ _STYLE = """
   .btn-danger { color: var(--bad); border-color: var(--bad); }
   .btn-danger:hover { background: var(--bad-bg); border-color: var(--bad); }
   .btn-danger:disabled { opacity: 0.5; cursor: default; }
-  #modal-backdrop {
+  .modal-backdrop {
     position: fixed; inset: 0; background: rgba(0,0,0,0.45); z-index: 20; display: none;
   }
-  #modal-backdrop.open { display: flex; align-items: flex-start; justify-content: center; padding: 5vh 16px; }
-  #modal {
+  .modal-backdrop.open { display: flex; align-items: flex-start; justify-content: center; padding: 5vh 16px; }
+  .modal-box {
     background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px;
     max-width: 780px; width: 100%; max-height: 88vh; overflow-y: auto;
     padding: 22px 26px 26px; box-shadow: 0 12px 40px rgba(0,0,0,0.35);
   }
-  #modal-head { display: flex; align-items: flex-start; gap: 12px; }
+  .modal-head-row { display: flex; align-items: flex-start; gap: 12px; }
   #modal-title { font-size: 17px; font-weight: 600; margin: 0; flex: 1; }
   #modal-sub { font-size: 12.5px; color: var(--text-secondary); margin-top: 3px; }
   #modal-close {
@@ -413,12 +413,31 @@ _STYLE = """
     background: var(--row-hover); border: 1px solid var(--border);
   }
   .q-comment { font-size: 12px; color: var(--text-secondary); margin-top: 7px; font-style: italic; }
-  #modal details { margin-top: 18px; }
-  #modal summary { font-size: 12px; color: var(--text-secondary); cursor: pointer; }
-  #modal pre {
+  .modal-box details { margin-top: 18px; }
+  .modal-box summary { font-size: 12px; color: var(--text-secondary); cursor: pointer; }
+  .modal-box pre {
     font-size: 11px; background: var(--page); border: 1px solid var(--border); border-radius: 8px;
     padding: 12px; overflow-x: auto; max-height: 300px; overflow-y: auto;
   }
+  #filter-modal-title { font-size: 17px; font-weight: 600; margin: 0; flex: 1; }
+  .filter-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 12px 16px; margin: 18px 0;
+  }
+  .filter-grid label { font-size: 11.5px; color: var(--text-secondary); display: flex; flex-direction: column; gap: 4px; }
+  .filter-grid input, .filter-grid select {
+    font: inherit; font-size: 13px; padding: 6px 9px; color: var(--text-primary);
+    background: var(--page); border: 1px solid var(--border); border-radius: 6px; outline: none;
+  }
+  .filter-grid input:focus, .filter-grid select:focus { border-color: var(--series-1); }
+  .filter-grid .span-2 { grid-column: span 2; }
+  #filter-preview { display: flex; align-items: center; gap: 12px; margin-top: 4px; }
+  #filter-preview-list { margin-top: 10px; max-height: 220px; overflow-y: auto; }
+  .filter-preview-row {
+    font-size: 12px; padding: 5px 0; border-bottom: 1px solid var(--grid);
+    overflow-wrap: anywhere;
+  }
+  #filter-actions { margin-top: 18px; display: flex; justify-content: flex-end; }
   footer { margin-top: 24px; color: var(--text-muted); font-size: 12px; }
   footer code { font-size: 11px; }
   #tip {
@@ -433,9 +452,9 @@ _STYLE = """
 
 _SCRIPT = """
 <div id="tip"><div class="tip-v"></div><div class="tip-l"></div></div>
-<div id="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="modal-title">
-  <div id="modal">
-    <div id="modal-head">
+<div id="modal-backdrop" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+  <div id="modal" class="modal-box">
+    <div class="modal-head-row">
       <div style="flex:1">
         <h3 id="modal-title"></h3>
         <div id="modal-sub"></div>
@@ -448,6 +467,38 @@ _SCRIPT = """
       <button id="modal-close" aria-label="Close">&#10005;</button>
     </div>
     <div id="modal-body"></div>
+  </div>
+</div>
+<div id="filter-modal-backdrop" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="filter-modal-title">
+  <div class="modal-box">
+    <div class="modal-head-row">
+      <h3 id="filter-modal-title">Delete surveys by filter</h3>
+      <button id="filter-modal-close" aria-label="Close">&#10005;</button>
+    </div>
+    <div class="filter-grid">
+      <label>Title contains <input type="text" id="f-title" placeholder="e.g. Q3 Store Visit" /></label>
+      <label>Location contains <input type="text" id="f-location" placeholder="e.g. Geneva" /></label>
+      <label>Status contains <input type="text" id="f-status" placeholder="e.g. Completed" /></label>
+      <label>Campaign contains <input type="text" id="f-campaign" /></label>
+      <label>Fieldworker contains <input type="text" id="f-fieldworker" placeholder="name or login" /></label>
+      <label>Opened
+        <select id="f-opened"><option value="">Any</option><option value="yes">Yes</option><option value="no">No</option></select>
+      </label>
+      <label>Survey ID from <input type="number" id="f-id-min" placeholder="e.g. 10001" /></label>
+      <label>Survey ID to <input type="number" id="f-id-max" placeholder="e.g. 10050" /></label>
+      <label>Date from <input type="date" id="f-date-from" /></label>
+      <label>Date to <input type="date" id="f-date-to" /></label>
+      <label>Score min <input type="number" id="f-score-min" step="0.1" /></label>
+      <label>Score max <input type="number" id="f-score-max" step="0.1" /></label>
+    </div>
+    <div id="filter-preview">
+      <button id="filter-preview-btn" class="btn">Preview matches</button>
+      <span id="filter-preview-count" class="count"></span>
+    </div>
+    <div id="filter-preview-list"></div>
+    <div id="filter-actions">
+      <button id="filter-delete-btn" class="btn btn-danger" disabled>Delete matching surveys…</button>
+    </div>
   </div>
 </div>
 <script>
@@ -740,6 +791,101 @@ _SCRIPT = """
     });
   }
 
+  /* ---- Delete-by-filter modal (title/location/status/campaign/fieldworker,
+     ID range, date range, score range, opened yes/no -- combined with AND) ---- */
+  var filterBackdrop = document.getElementById("filter-modal-backdrop");
+  var openFilterBtn = document.getElementById("open-filter-modal-btn");
+  var filterCloseBtn = document.getElementById("filter-modal-close");
+  var filterPreviewBtn = document.getElementById("filter-preview-btn");
+  var filterDeleteBtn = document.getElementById("filter-delete-btn");
+  var filterPreviewCount = document.getElementById("filter-preview-count");
+  var filterPreviewList = document.getElementById("filter-preview-list");
+  var lastPreviewTotal = null;
+  var lastPreviewFilters = null;
+
+  function fVal(id) { return document.getElementById(id).value.trim(); }
+
+  function collectFilters() {
+    var filters = {};
+    if (fVal("f-title")) filters.title = fVal("f-title");
+    if (fVal("f-location")) filters.location = fVal("f-location");
+    if (fVal("f-status")) filters.status = fVal("f-status");
+    if (fVal("f-campaign")) filters.campaign = fVal("f-campaign");
+    if (fVal("f-fieldworker")) filters.fieldworker = fVal("f-fieldworker");
+    if (fVal("f-id-min")) filters.id_min = parseInt(fVal("f-id-min"), 10);
+    if (fVal("f-id-max")) filters.id_max = parseInt(fVal("f-id-max"), 10);
+    if (fVal("f-date-from")) filters.date_from = fVal("f-date-from");
+    if (fVal("f-date-to")) filters.date_to = fVal("f-date-to");
+    if (fVal("f-score-min")) filters.score_min = parseFloat(fVal("f-score-min"));
+    if (fVal("f-score-max")) filters.score_max = parseFloat(fVal("f-score-max"));
+    var opened = document.getElementById("f-opened").value;
+    if (opened) filters.opened = opened === "yes";
+    return filters;
+  }
+
+  function resetFilterPreview() {
+    lastPreviewTotal = null;
+    lastPreviewFilters = null;
+    filterDeleteBtn.disabled = true;
+    filterPreviewCount.textContent = "";
+    filterPreviewList.textContent = "";
+  }
+
+  if (openFilterBtn) {
+    openFilterBtn.addEventListener("click", function () {
+      resetFilterPreview();
+      filterBackdrop.classList.add("open");
+    });
+  }
+  if (filterCloseBtn) filterCloseBtn.addEventListener("click", function () { filterBackdrop.classList.remove("open"); });
+  if (filterBackdrop) {
+    filterBackdrop.addEventListener("click", function (e) { if (e.target === filterBackdrop) filterBackdrop.classList.remove("open"); });
+  }
+
+  if (filterPreviewBtn) {
+    filterPreviewBtn.addEventListener("click", function () {
+      var filters = collectFilters();
+      if (!Object.keys(filters).length) { window.alert("Set at least one filter first — an empty filter would match everything (use Clear ALL surveys for that, on purpose)."); return; }
+      resetFilterPreview();
+      filterPreviewBtn.disabled = true;
+      filterPreviewCount.textContent = "Checking…";
+      apiPost("/api/preview-filtered", { filters: filters })
+        .then(function (data) {
+          lastPreviewTotal = data.total;
+          lastPreviewFilters = filters;
+          filterPreviewCount.textContent = data.total.toLocaleString() + " survey(s) match";
+          data.preview.forEach(function (p) {
+            var row = el("div", "filter-preview-row");
+            row.textContent = p.survey_id + " — " + (p.title || "(untitled)") + " — " + (p.location || "(unknown)") +
+              (p.date ? " — " + String(p.date).slice(0, 10) : "");
+            filterPreviewList.appendChild(row);
+          });
+          if (data.total > data.preview.length) {
+            filterPreviewList.appendChild(el("div", "count", "…and " + (data.total - data.preview.length) + " more"));
+          }
+          filterDeleteBtn.disabled = data.total === 0;
+        })
+        .catch(function (e) { filterPreviewCount.textContent = ""; window.alert("Preview failed: " + e.message); })
+        .then(function () { filterPreviewBtn.disabled = false; });
+    });
+  }
+
+  if (filterDeleteBtn) {
+    filterDeleteBtn.addEventListener("click", function () {
+      if (lastPreviewTotal === null || !lastPreviewFilters) return;
+      var total = lastPreviewTotal;
+      if (!window.confirm("Permanently delete " + total.toLocaleString() + " survey(s) matching these filters?\\n\\nA backup JSON is saved on the server first, but this cannot be undone from the dashboard.")) return;
+      if (total > 1) {
+        var typed = window.prompt("Type the number of surveys to confirm (" + total + "):");
+        if (typed !== String(total)) { window.alert("Cancelled — number didn't match. Nothing deleted."); return; }
+      }
+      filterDeleteBtn.disabled = true;
+      apiPost("/api/delete-filtered", { filters: lastPreviewFilters, expected_count: total })
+        .then(function (data) { window.location = data.redirect || "/"; })
+        .catch(function (e) { window.alert("Delete failed: " + e.message); filterDeleteBtn.disabled = false; });
+    });
+  }
+
   closeBtn.addEventListener("click", closeModal);
   backdrop.addEventListener("click", function (e) { if (e.target === backdrop) closeModal(); });
   document.addEventListener("keydown", function (e) {
@@ -865,6 +1011,7 @@ def render_html(data: dict) -> str:
       <button class="seg-btn" data-filter="no">Not opened</button>
     </div>
     <span id="search-count" class="count"></span>
+    <button id="open-filter-modal-btn" class="btn btn-danger live-only" style="display:none">Delete by filter…</button>
     <button id="clear-all-btn" class="btn btn-danger live-only" style="display:none">Clear ALL surveys…</button>
     <span class="count static-only">Delete &amp; Clear-all need <code>manage.py serve</code> — see README</span>
   </div>

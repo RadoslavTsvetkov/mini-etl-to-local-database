@@ -32,3 +32,10 @@ def backup_all_surveys(records: list[dict]) -> str:
     """Backs up every survey before `clear-surveys` wipes the table."""
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     return _write(records, f"all_surveys_backup_{stamp}.json")
+
+
+def backup_filtered_surveys(records: list[dict]) -> str:
+    """Backs up the rows matched by a filter before `delete-surveys` (CLI)
+    or the dashboard's "Delete by filter" action removes them."""
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    return _write(records, f"filtered_surveys_backup_{stamp}.json")

@@ -149,28 +149,56 @@ the dashboard itself (via `run.bat serve`) or from the command line.
 
 ## 2.2 Removing surveys from the database
 
-Two ways to permanently delete survey data — both take a JSON backup first
-(in `data/backups/`) and both refresh the dashboard automatically afterward.
-**Neither of these touches anything on the Shopmetrics side** — they only
-remove rows from *your local database* (SQLite or SQL Server, whichever
-`--db`/`DB_BACKEND` currently points at); if you extract again with
-`--mode api`, a deleted survey that's still unopened on your Shopmetrics
-account will simply be re-downloaded, since extraction is keyed off
-Shopmetrics' own opened/unopened flag, not your local database's contents.
+Three ways to permanently delete survey data, from "one specific survey" to
+"everything matching a rule" to "literally everything" — all three take a
+JSON backup first (in `data/backups/`) and all three refresh the dashboard
+automatically afterward. **None of these touch anything on the Shopmetrics
+side** — they only remove rows from *your local database* (SQLite or SQL
+Server, whichever `--db`/`DB_BACKEND` currently points at); if you extract
+again with `--mode api`, a deleted survey that's still unopened on your
+Shopmetrics account will simply be re-downloaded, since extraction is keyed
+off Shopmetrics' own opened/unopened flag, not your local database's
+contents.
 
 ### Command line (always available)
 
+**One specific survey, by ID:**
 ```
 run.bat delete-survey 10656
 ```
 Shows the survey's title/location, then asks you to type `yes` to confirm.
 Skip the prompt in a script with `--yes` (still writes the backup first).
 
+**Everything matching a rule — title, location, date range, ID range, or
+any combination:**
+```
+run.bat delete-surveys --location Geneva
+run.bat delete-surveys --title "Q3 Store Visit" --status Completed
+run.bat delete-surveys --id-min 10001 --id-max 10050
+run.bat delete-surveys --date-from 2026-01-01 --date-to 2026-03-31
+run.bat delete-surveys --opened no --fieldworker "Jane"
+```
+Every flag is optional and they combine with AND (all given conditions must
+match). Text flags (`--title`, `--location`, `--status`, `--campaign`,
+`--fieldworker`) match case-insensitive substrings, so `--location geneva`
+matches "Geneva" and "Geneva - Airport" alike. `--ids 10001,10002,10005`
+targets an arbitrary, non-contiguous set by exact ID instead of a range.
+Full flag list: `run.bat delete-surveys --help`.
+
+It shows exactly how many surveys match and a preview of the first 10
+(ID, title, location, date) before asking you to confirm — and **refuses
+to run with no filters at all**, on purpose, so you can't reach for this
+command and accidentally wipe the whole table; use `clear-surveys` for
+that. Confirmation works the same way as `clear-surveys` below: type the
+exact match count to confirm interactively, or pass both `--yes` and
+`--expect-count N` in a script.
+
+**Absolutely everything:**
 ```
 run.bat clear-surveys
 ```
-**Deletes every survey in the database.** Because this is destructive and
-hard to undo, it asks for **two** separate confirmations, not one:
+Because this is the most destructive and hardest-to-undo option, it asks
+for **two** separate confirmations, not one:
 1. Type the *exact number* of surveys shown (e.g. `1807`) — a typo-guard
    that also makes you actually look at how many rows are about to go.
 2. Type `DELETE ALL` (exact capitals).
@@ -187,22 +215,25 @@ since grown or shrunk.
 A dashboard opened as a plain file can't write to the database — there's no
 server behind a `.html` file for it to talk to. `run.bat serve` (or
 `python src/manage.py serve`) fixes that by serving the same dashboard over
-a small local web server, which turns on real, working **Delete** (in the
-survey Details view) and **Clear ALL surveys…** (above the survey table)
-buttons:
+a small local web server, which turns on three real, working actions above
+and inside the survey table: **Delete** (in the survey Details view —
+single survey), **Delete by filter…** (a form with the same fields as
+`delete-surveys` above — title, location, status, campaign, fieldworker, ID
+range, date range, score range, opened yes/no — plus a live "N surveys
+match" preview before you commit), and **Clear ALL surveys…**:
 
 ```
 run.bat serve
 ```
 Opens `http://127.0.0.1:8765/` in your browser (use `--port` to pick a
-different port). Clicking **Delete** asks for confirmation once; clicking
-**Clear ALL surveys…** asks for confirmation *and* makes you type
-`DELETE ALL` into a prompt before anything happens — same two-step
-seriousness as the command line, just via browser dialogs instead of a
-console. Either action backs up first, deletes, regenerates the dashboard,
-and takes you straight to the fresh (now-updated) report. Press `Ctrl+C` in
-the console to stop serving — it doesn't run unless you start it, and it
-only listens on `127.0.0.1` (your machine only, never your network).
+different port). Every one of the three asks for confirmation via browser
+dialogs — single delete just once, the filtered and clear-all actions both
+make you type the exact number back (clear-all also requires typing
+`DELETE ALL`) — same seriousness as the command line. Every action backs up
+first, deletes, regenerates the dashboard, and takes you straight to the
+fresh (now-updated) report. Press `Ctrl+C` in the console to stop serving —
+it doesn't run unless you start it, and it only listens on `127.0.0.1`
+(your machine only, never your network).
 
 ### About the backups
 

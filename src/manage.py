@@ -8,6 +8,7 @@ Usage:
     python manage.py browse show <survey_id>
     python manage.py dashboard [output_path]
     python manage.py delete-survey <survey_id> [--yes]
+    python manage.py delete-surveys [--title ...] [--location ...] [--id-min N --id-max N] [...] [--yes --expect-count N]
     python manage.py clear-surveys [--yes --expect-count N]
     python manage.py serve [--port 8765]
     python manage.py setup-db
@@ -128,6 +129,115 @@ def cmd_delete_survey(args: argparse.Namespace) -> int:
         conn.close()
 
 
+_FILTER_LABELS = {
+    "ids": "Survey IDs", "id_min": "Survey ID from", "id_max": "Survey ID to",
+    "title": "Title contains", "location": "Location contains", "status": "Status contains",
+    "campaign": "Campaign contains", "fieldworker": "Fieldworker contains",
+    "date_from": "Date from", "date_to": "Date to (inclusive)",
+    "score_min": "Score at least", "score_max": "Score at most", "opened": "Opened",
+}
+
+
+def _args_to_filters(args: argparse.Namespace) -> dict:
+    return {
+        "ids": [s.strip() for s in args.ids.split(",") if s.strip()] if args.ids else None,
+        "id_min": args.id_min,
+        "id_max": args.id_max,
+        "title": args.title,
+        "location": args.location,
+        "status": args.status,
+        "campaign": args.campaign,
+        "fieldworker": args.fieldworker,
+        "date_from": args.date_from,
+        "date_to": args.date_to,
+        "score_min": args.score_min,
+        "score_max": args.score_max,
+        "opened": {"yes": True, "no": False}.get(args.opened),
+    }
+
+
+def _print_filter_summary(active_filters: dict) -> None:
+    for key, value in active_filters.items():
+        if key == "opened":
+            value = "Yes" if value else "No"
+        elif key == "ids":
+            value = ", ".join(value)
+        print(f"  {_FILTER_LABELS.get(key, key)}: {value}")
+
+
+def cmd_delete_surveys(args: argparse.Namespace) -> int:
+    _apply_db_override(args)
+    filters = _args_to_filters(args)
+    active_filters = {k: v for k, v in filters.items() if v not in (None, [])}
+    if not active_filters:
+        print(f"{RED}No filters given — delete-surveys refuses to run with none (that would")
+        print(f"match every survey). Use `clear-surveys` if that's actually what you want.{RESET}")
+        return 1
+
+    try:
+        where_sql, params = load.build_survey_filter(filters)
+    except load.FilterError as e:
+        print(f"{RED}{e}{RESET}")
+        return 1
+
+    conn = get_connection()
+    try:
+        records = load.fetch_matching_surveys(conn, where_sql, params)
+        total = len(records)
+        if total == 0:
+            print("No surveys match these filters — nothing to delete.")
+            return 0
+
+        print(f"\n{BOLD}{RED}This will permanently delete {total:,} survey(s) matching:{RESET}")
+        _print_filter_summary(active_filters)
+        preview_n = min(10, total)
+        print(f"\n{BOLD}Preview (first {preview_n} of {total:,}):{RESET}")
+        for r in records[:10]:
+            print(f"  {r['survey_id']}  {r.get('survey_title') or '(untitled)'} — "
+                  f"{r.get('location_name') or '(unknown)'} — {(r.get('submitted_at') or '')[:10]}")
+        if total > 10:
+            print(f"  ... and {total - 10:,} more")
+        print()
+
+        if args.yes or args.expect_count is not None:
+            if not args.yes or args.expect_count != total:
+                print(f"{RED}Refusing: needs both --yes and --expect-count {total} (the exact")
+                print(f"current match count) to confirm you know what you're about to delete.")
+                print(f"Got --expect-count={args.expect_count}.{RESET}")
+                return 1
+        else:
+            if not sys.stdin.isatty():
+                print(f"{RED}Refusing without --yes --expect-count {total} in a non-interactive context.{RESET}")
+                return 1
+            try:
+                answer = input(f"Type the number of surveys to confirm ({total}): ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print(f"\n{RED}Cancelled — nothing deleted.{RESET}")
+                return 1
+            if answer != str(total):
+                print("Cancelled — number didn't match. Nothing deleted.")
+                return 1
+
+        # Re-check right before deleting -- protects against drift between
+        # the confirmation and the delete (same idea as clear-surveys).
+        current = load.count_matching_surveys(conn, where_sql, params)
+        if current != total:
+            print(f"{RED}Match count changed (now {current}) — re-run to see the fresh set. Nothing deleted.{RESET}")
+            return 1
+
+        backup_path = backup.backup_filtered_surveys(records)
+        deleted = load.delete_matching_surveys(conn, where_sql, params)
+
+        print(f"{GREEN}Deleted {deleted:,} survey(s).{RESET} Backup saved to {backup_path}")
+        _refresh_dashboard_after_change(
+            args, f"Deleted {deleted} surveys via manage.py delete-surveys (filters: {active_filters}; backup: {backup_path})",
+            level="warning",
+        )
+        return 0
+    finally:
+        conn.close()
+
+
 def cmd_clear_surveys(args: argparse.Namespace) -> int:
     _apply_db_override(args)
     conn = get_connection()
@@ -221,6 +331,28 @@ def build_parser() -> argparse.ArgumentParser:
     p_del.add_argument("--yes", action="store_true", help="Skip the interactive confirmation (required in non-interactive contexts)")
     p_del.add_argument("--no-open", action="store_true", help="Don't open the refreshed dashboard in the browser")
     p_del.set_defaults(func=cmd_delete_survey)
+
+    p_delf = sub.add_parser(
+        "delete-surveys", parents=[_db_parent()],
+        help="Permanently delete surveys matching filters (title/location/status/campaign/fieldworker/ID range/date/score/opened). Backed up to JSON first.",
+    )
+    p_delf.add_argument("--ids", help="Comma-separated exact survey IDs, e.g. 10001,10002,10005")
+    p_delf.add_argument("--id-min", type=int, help="Survey ID range start (inclusive)")
+    p_delf.add_argument("--id-max", type=int, help="Survey ID range end (inclusive)")
+    p_delf.add_argument("--title", help="Substring match (case-insensitive) on survey title")
+    p_delf.add_argument("--location", help="Substring match on location name")
+    p_delf.add_argument("--status", help="Substring match on survey status")
+    p_delf.add_argument("--campaign", help="Substring match on campaign")
+    p_delf.add_argument("--fieldworker", help="Substring match on fieldworker name or login")
+    p_delf.add_argument("--date-from", help="YYYY-MM-DD, inclusive")
+    p_delf.add_argument("--date-to", help="YYYY-MM-DD, inclusive")
+    p_delf.add_argument("--score-min", type=float, help="Minimum score (inclusive)")
+    p_delf.add_argument("--score-max", type=float, help="Maximum score (inclusive)")
+    p_delf.add_argument("--opened", choices=["yes", "no"], help="Filter by opened status")
+    p_delf.add_argument("--yes", action="store_true", help="Non-interactive confirmation, part 1 of 2 (also requires --expect-count)")
+    p_delf.add_argument("--expect-count", type=int, default=None, help="Non-interactive confirmation, part 2 of 2: must equal the exact current match count")
+    p_delf.add_argument("--no-open", action="store_true", help="Don't open the refreshed dashboard in the browser")
+    p_delf.set_defaults(func=cmd_delete_surveys)
 
     p_clear = sub.add_parser(
         "clear-surveys", parents=[_db_parent()],
