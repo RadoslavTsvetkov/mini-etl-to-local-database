@@ -57,8 +57,11 @@ def cmd_browse(args: argparse.Namespace) -> int:
 
 def cmd_dashboard(args: argparse.Namespace) -> int:
     _apply_db_override(args)
+    import config
+
     path = generate_dashboard.generate(args.output)
-    print(f"Dashboard written to {path}")
+    opened = not args.no_open and config.OPEN_DASHBOARD and generate_dashboard.open_in_browser(path)
+    print(f"Dashboard written to {path}" + (" (opened in your browser)" if opened else ""))
     return 0
 
 
@@ -91,6 +94,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_dash = sub.add_parser("dashboard", parents=[_db_parent()], help="Generate the HTML dashboard.")
     p_dash.add_argument("output", nargs="?", default=None, help="Output path (default: reports/dashboard.html)")
+    p_dash.add_argument("--no-open", action="store_true", help="Don't open the dashboard in the browser")
     p_dash.set_defaults(func=cmd_dashboard)
 
     p_setup = sub.add_parser("setup-db", parents=[_db_parent()], help="Create/verify the database for the current DB_BACKEND.")

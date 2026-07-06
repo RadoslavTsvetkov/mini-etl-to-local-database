@@ -22,9 +22,13 @@ PATH"** during install) and double-click `install.bat` again.
 
 **Then, any time you want to use the pipeline: double-click `run.bat`.**
 That's it — no manual `pip install`, no activating a venv by hand, no
-terminal required. Double-clicking `run.bat` with no arguments runs the
-pipeline once, safely, offline (sample data, no credentials needed), then
-waits for a key press so you can read the output before the window closes.
+terminal required. Double-clicking `run.bat` with no arguments scrapes the
+newest unopened surveys from the live Shopmetrics Query API (read-only; the
+mark-opened step stays mocked), refreshes the dashboard, opens it in your
+browser, then waits for a key press so you can read the output. The first
+time, if `.env` has no API credentials yet, it asks for your Client ID and
+Client Secret right in the console, saves them to `.env`, and verifies them
+before continuing (§4.1 explains where these come from).
 
 To use the other commands (`view`, `browse`, `dashboard`, `setup-db`, or any
 flag), open a terminal in this folder instead and run `run.bat <command>
@@ -44,23 +48,31 @@ for what to `pip install`).
 - No third-party packages for the default SQLite backend. The optional SQL
   Server backend needs `pyodbc` — `install.bat` installs it automatically.
 
-## 1. Run it (safe, offline by default)
+## 1. Run it
 
 ```
-run.bat run
+run.bat            (double-click: scrapes the live API — same as "run.bat run --mode api")
+run.bat run        (uses config.json defaults: offline sample data, no network)
+run.bat run --mode file   (explicitly offline)
 ```
 
-By default this reads sample data from `data/sample_surveys.json` and
-simulates the "mark opened" step — **no network calls, no credentials
-needed.** Safe to run as many times as you like; it skips records it has
-already loaded.
+Double-clicking `run.bat` pulls real surveys from the Shopmetrics Query API
+(read-only) and simulates the "mark opened" step. If credentials are missing
+from `.env`, it prompts for them once, saves them, and verifies them against
+the API before running. The explicit `run.bat run` command still follows
+`config/config.json` defaults (`file`/`mock` — offline sample data). Either
+way it's safe to run repeatedly; records already loaded are skipped as
+duplicates.
 
-Every run automatically regenerates the HTML dashboard (§2.1) and prints a
-highlighted callout in the terminal pointing at it, so you don't have to
-remember to run it separately:
+Every run automatically generates a fresh HTML dashboard (§2.1), **opens it
+in your default browser**, and prints a callout in the terminal pointing at
+it. Reports are numbered (`dashboard1.html`, `dashboard2.html`, …) and never
+overwritten — each run writes the next number and keeps the older ones:
 ```
-Dashboard updated — check it out: C:\...\reports\dashboard.html
+Dashboard updated (opened in your browser — pass --no-open to skip): C:\...\reports\dashboard7.html
 ```
+Pass `--no-open` (or set `OPEN_DASHBOARD=false` in `config/config.json`/`.env`)
+if you'd rather it not pop up a browser tab each run.
 (A dashboard regeneration failure is logged as a warning but never fails
 the run itself — it's a nice-to-have on top of the actual ETL result.)
 
@@ -100,12 +112,22 @@ again (e.g. after switching `--db` just to look at the other backend's data):
 run.bat dashboard
 ```
 
-Writes a self-contained HTML report to `reports/dashboard.html` — open it
-in any browser (double-click it, or drag it into a browser tab; no server
-needed). It includes KPI tiles (total surveys, opened, average score,
-errors), a score distribution chart, breakdowns by status/location/title,
-recent run history, and a full sortable-by-eye data table. Supports light
-and dark mode automatically (follows your OS/browser theme).
+Writes a self-contained HTML report to `reports/dashboard<N>.html` — numbered
+in order (`dashboard1.html`, `dashboard2.html`, …), never overwriting earlier
+reports, so you keep a history; delete old ones whenever you like (each is a
+few MB). It opens in your default browser automatically (pass `--no-open` to
+skip that; the file also opens fine by double-clicking it later — no server
+needed). It
+includes KPI tiles (total surveys, opened, average score, errors), a score
+distribution chart, breakdowns by status/location/title, recent run history,
+and a table of **every** survey in the database — hover any bar for exact
+counts and percentages, click any column header to sort, and use the search
+box to find a survey by its ID (or any title/location/fieldworker text).
+Every row has a **Details** button that opens the survey's full record —
+all stored fields plus the responses (`responses_json`) rendered as
+question-by-question answer chips and comments, with the raw JSON one click
+away. Supports light and dark mode automatically (follows your OS/browser
+theme).
 
 ## 3. Using SQL Server / SSMS instead of (or alongside) SQLite
 
@@ -248,18 +270,18 @@ run.bat run --mode api --command-mode mock
   (the default) for real runs until that's resolved (e.g. by asking
   Shopmetrics support for the current equivalent).
 
-**Pulling everything available, not just a small batch:** each API-mode run
-only pulls up to `SHOPMETRICS_MAX_RECORDS_PER_RUN` survey instances (default
-10, to respect the KB's fair-use guidance against high-volume calls). To
-collect the full backlog for your configured client in one go, raise it for
-that run:
+**How much gets pulled:** each API-mode run pulls up to
+`SHOPMETRICS_MAX_RECORDS_PER_RUN` survey instances — default **5000**, i.e.
+the full backlog for your configured client every run (~1800 unopened
+surveys on this account). That's still just 2 API calls total (one list
+query, one responses query) regardless of how many rows come back, so it
+doesn't run afoul of the KB's fair-use guidance. Use `--max-records` to
+pull a smaller batch for a quick test:
 ```
-run.bat run --mode api --max-records 2000
+run.bat run --mode api --max-records 10
 ```
-This is still just 2 API calls total (one list query, one responses query)
-regardless of how many rows come back, so it doesn't run afoul of fair use.
-Run it once with `--db sqlite` and once with `--db sqlserver` if you want
-the full dataset in both places.
+Run a full pull once with `--db sqlite` and once with `--db sqlserver` if
+you want the full dataset in both places.
 
 ### 4.4 Quick reference
 
@@ -268,7 +290,8 @@ the full dataset in both places.
 | Extraction source | `--mode` | `EXTRACTION_MODE` (config.json) | `file` (default, no network) or `api` (real Query API, read-only) |
 | Mark-opened mode | `--command-mode` | `COMMAND_MODE` (config.json) | `mock` (default, no network) or `live` (real Command API, **writes real data** — currently returns HTTP 500 on this account, §10.3) |
 | Database backend | `--db` | `DB_BACKEND` (config.json) | `sqlite` (default, `data/etl.db`, no extra install) or `sqlserver` (local SQL Server, viewable in SSMS) |
-| Records per run | `--max-records` | `SHOPMETRICS_MAX_RECORDS_PER_RUN` (config.json) | `10` (default). Raise it to pull more/everything in `api` mode. |
+| Records per run | `--max-records` | `SHOPMETRICS_MAX_RECORDS_PER_RUN` (config.json) | `5000` (default — collects the full backlog every `api` run). Lower it for a small test batch. |
+| Auto-open dashboard | `--no-open` | `OPEN_DASHBOARD` (config.json/.env) | `true` (default): open the newly numbered `reports/dashboard<N>.html` in the browser after `run`/`dashboard`. |
 | SQL Server instance | — | `SQLSERVER_SERVER` (config.json) | `.\SQLEXPRESS` (default) |
 | SQL Server database | — | `SQLSERVER_DATABASE` (config.json) | `ShopmetricsETL` (default); created automatically if missing |
 | API credentials | — | `SHOPMETRICS_CLIENT_ID`/`_SECRET` (`.env` only) | *(unset)*; required for `api`/`live` |

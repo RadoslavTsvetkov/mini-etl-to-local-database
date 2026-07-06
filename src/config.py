@@ -58,6 +58,28 @@ _load_dotenv(ENV_PATH)
 _load_json_config(CONFIG_JSON_PATH)
 
 
+def save_env_values(updates: dict) -> None:
+    """Writes KEY=VALUE pairs into .env, replacing existing lines for those
+    keys (commented or not) and appending any that aren't present. Keeps
+    every other line untouched. Used by the interactive credentials prompt."""
+    lines = []
+    if os.path.exists(ENV_PATH):
+        with open(ENV_PATH, "r", encoding="utf-8") as f:
+            lines = f.read().splitlines()
+
+    remaining = dict(updates)
+    for i, line in enumerate(lines):
+        stripped = line.strip().lstrip("#").strip()
+        key = stripped.partition("=")[0].strip()
+        if key in remaining:
+            lines[i] = f"{key}={remaining.pop(key)}"
+    for key, value in remaining.items():
+        lines.append(f"{key}={value}")
+
+    with open(ENV_PATH, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+
+
 def _resolve_path(value: str) -> str:
     """Relative paths in config are relative to the project root."""
     return value if os.path.isabs(value) else os.path.join(PROJECT_ROOT, value)
@@ -84,6 +106,10 @@ SQLSERVER_TRUST_SERVER_CERTIFICATE = os.environ.get("SQLSERVER_TRUST_SERVER_CERT
 SCHEMA_SQLSERVER_PATH = os.path.join(SRC_DIR, "db", "schema_sqlserver.sql")
 
 SURVEYS_SOURCE_PATH = _resolve_path(os.environ.get("SURVEYS_SOURCE_PATH", "data/sample_surveys.json"))
+
+# Open the regenerated HTML dashboard in the default browser after each
+# run / dashboard command. Override per-run with --no-open.
+OPEN_DASHBOARD = os.environ.get("OPEN_DASHBOARD", "true").strip().lower() in ("1", "true", "yes", "on")
 LOG_PATH = _resolve_path(os.environ.get("LOG_PATH", "logs/etl.log"))
 
 # --- Pipeline mode switches ---
@@ -101,9 +127,12 @@ SHOPMETRICS_CLIENT_ID = os.environ.get("SHOPMETRICS_CLIENT_ID")
 SHOPMETRICS_CLIENT_SECRET = os.environ.get("SHOPMETRICS_CLIENT_SECRET")
 SHOPMETRICS_CLIENT_OR_FORM_IDS = os.environ.get("SHOPMETRICS_CLIENT_OR_FORM_IDS", "-995")
 # Caps how many survey instances a single API-mode run will pull/process.
-# The KB's Fair Use policy (APIINT) warns against high-volume consecutive
-# calls, and this account alone has 1000+ unopened surveys, so we bound it.
-SHOPMETRICS_MAX_RECORDS_PER_RUN = int(os.environ.get("SHOPMETRICS_MAX_RECORDS_PER_RUN", "10"))
+# Set high enough (5000) to collect this account's full backlog (~1800
+# unopened surveys) in one run. This stays within the KB's Fair Use policy
+# (APIINT: no high-volume *consecutive* calls) because a run is always just
+# 2 API calls — one list query, one responses query — however many rows
+# come back. Lower it per-run with --max-records if you want a small batch.
+SHOPMETRICS_MAX_RECORDS_PER_RUN = int(os.environ.get("SHOPMETRICS_MAX_RECORDS_PER_RUN", "5000"))
 
 TOKEN_ENDPOINT = f"{SHOPMETRICS_BASE_URL}/oauth/connect/token"
 QUERY_ENDPOINT = f"{SHOPMETRICS_BASE_URL}/api/v2/execute"

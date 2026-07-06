@@ -14,11 +14,61 @@ import config
 import extract
 import generate_dashboard
 import load
-from colors import BOLD, CYAN, RESET
+from colors import BOLD, CYAN, GREEN, RED, RESET, YELLOW
 from db.setup_db import get_connection
 from logger import get_logger
 
 logger = get_logger()
+
+
+def ensure_api_credentials() -> bool:
+    """Called before any run that talks to the real Shopmetrics API
+    (EXTRACTION_MODE=api or COMMAND_MODE=live). If .env has no client
+    ID/secret yet, asks for them right here in the console, saves them to
+    .env for next time, and verifies them with a real token request.
+    Returns False (after explaining what to do) when credentials are
+    missing and can't be obtained."""
+    if config.SHOPMETRICS_CLIENT_ID and config.SHOPMETRICS_CLIENT_SECRET:
+        return True
+
+    print(f"\n{BOLD}{YELLOW}Shopmetrics API credentials are not set up yet.{RESET}")
+    print("This run needs the real API, which requires a Client ID and Client Secret")
+    print("(created in Shopmetrics under Administration → Tools and Settings →")
+    print("Site Settings → Other → API v2 Authorization – Client Credentials).\n")
+
+    if not sys.stdin.isatty():
+        print(f"{RED}Fill in SHOPMETRICS_CLIENT_ID and SHOPMETRICS_CLIENT_SECRET in the")
+        print(f".env file (see .env.example), then run this again.{RESET}")
+        return False
+
+    try:
+        client_id = input("  Shopmetrics Client ID: ").strip()
+        client_secret = input("  Shopmetrics Client Secret: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print(f"\n{RED}Cancelled — fill in .env manually and run again.{RESET}")
+        return False
+
+    if not client_id or not client_secret:
+        print(f"\n{RED}Both values are required — nothing saved. Fill in .env (see")
+        print(f".env.example) or run this again and enter them at the prompt.{RESET}")
+        return False
+
+    config.SHOPMETRICS_CLIENT_ID = client_id
+    config.SHOPMETRICS_CLIENT_SECRET = client_secret
+    config.save_env_values(
+        {"SHOPMETRICS_CLIENT_ID": client_id, "SHOPMETRICS_CLIENT_SECRET": client_secret}
+    )
+    print(f"\n{GREEN}Credentials saved to .env (gitignored — they stay on this machine).{RESET}")
+
+    print("Verifying them against the API...", end=" ", flush=True)
+    try:
+        api_client.get_access_token()
+        print(f"{GREEN}OK — starting the run.{RESET}\n")
+    except api_client.ShopmetricsAPIError as e:
+        print(f"\n{RED}Verification failed: {e}{RESET}")
+        print(f"{RED}Double-check the ID/secret in .env (or their status in Shopmetrics) and run again.{RESET}")
+        return False
+    return True
 
 
 def build_arg_parser(add_help: bool = True) -> argparse.ArgumentParser:
@@ -32,6 +82,7 @@ def build_arg_parser(add_help: bool = True) -> argparse.ArgumentParser:
     parser.add_argument("--command-mode", choices=["mock", "live"], help="Mark-opened Command API mode (default: COMMAND_MODE from .env)")
     parser.add_argument("--db", choices=["sqlite", "sqlserver"], help="Database backend (default: DB_BACKEND from .env)")
     parser.add_argument("--max-records", type=int, help="Max survey instances to pull in api mode (default: SHOPMETRICS_MAX_RECORDS_PER_RUN from .env)")
+    parser.add_argument("--no-open", action="store_true", help="Don't open the regenerated dashboard in the browser")
     return parser
 
 
@@ -44,6 +95,8 @@ def apply_overrides(args: argparse.Namespace) -> None:
         config.DB_BACKEND = args.db
     if args.max_records:
         config.SHOPMETRICS_MAX_RECORDS_PER_RUN = args.max_records
+    if getattr(args, "no_open", False):
+        config.OPEN_DASHBOARD = False
 
 
 def start_run(conn) -> int:
@@ -81,6 +134,9 @@ def finish_run(conn, run_id: int, extracted: int, loaded: int, duplicates: int,
 
 
 def run() -> int:
+    if (config.EXTRACTION_MODE == "api" or config.COMMAND_MODE == "live") and not ensure_api_credentials():
+        return 1
+
     logger.info("=== ETL run starting (EXTRACTION_MODE=%s, COMMAND_MODE=%s) ===",
                 config.EXTRACTION_MODE, config.COMMAND_MODE)
 
@@ -130,7 +186,10 @@ def run() -> int:
 
         try:
             dashboard_path = generate_dashboard.generate()
-            print(f"\n{BOLD}{CYAN}Dashboard updated — check it out: {dashboard_path}{RESET}\n")
+            opened_note = ""
+            if config.OPEN_DASHBOARD and generate_dashboard.open_in_browser(dashboard_path):
+                opened_note = " (opened in your browser — pass --no-open to skip)"
+            print(f"\n{BOLD}{CYAN}Dashboard updated{opened_note}: {dashboard_path}{RESET}\n")
         except Exception as e:
             logger.warning("Could not regenerate the dashboard: %s", e)
 

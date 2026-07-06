@@ -13,7 +13,7 @@ A small, self-contained Python ETL pipeline that:
 3. **Marks** each newly loaded survey as "opened" (`BulkProcessing_SetReadStatus`, flipping the same `IsSurveyInstanceViewedBySecurityUser` field the extraction filters on) via the real Shopmetrics Command API v2.
 4. **Logs** every run (date, counts, errors) to a log file.
 
-The pipeline runs end-to-end via a single entry point, `etl.py`. It defaults to a **mock/offline mode** (file extraction + simulated Command API) so it always runs without network access or credentials, and can be switched to the **real API** with environment variables.
+The pipeline runs end-to-end via a single entry point, `etl.py`. The *checked-in config defaults* remain **mock/offline** (file extraction + simulated Command API) so `manage.py run` always works without network access or credentials; the primary Windows entry point, a bare double-clicked `run.bat`, passes `--mode api` and therefore **scrapes the live Query API by default** (read-only; mark-opened stays mocked), prompting once for API credentials if `.env` doesn't have them (§4.2). After every run a new *numbered* HTML dashboard is generated (`reports/dashboard1.html`, `dashboard2.html`, …; older reports are kept) and opened in the default browser automatically.
 
 ## 2. How This Maps to the Real Shopmetrics API
 
@@ -45,7 +45,7 @@ Everything below is taken from `_KNOWLEDGEBASE/023-APIs/`, not invented. Article
 | Auth credentials | `SHOPMETRICS_CLIENT_ID` / `SHOPMETRICS_CLIENT_SECRET` — account-specific, must be created by an admin in Shopmetrics (Administration → Tools and Settings → Site Settings → Other → API v2 Authorization – Client Credentials, per APIAUT). Unset by default; only required when `EXTRACTION_MODE=api` or `COMMAND_MODE=live`. |
 | Client/Form scope | `SHOPMETRICS_CLIENT_OR_FORM_IDS` — the `ClientOrFormIDs` filter value(s) for the Query API; account-specific, must be looked up via the `Parameter_ClientOrFormIDs` dataset (APICAP). Placeholder default `-995`. |
 | Configuration format | Split in two: **`config/config.json`** (checked into git) holds all non-secret settings and defaults; **`.env`** (gitignored) holds secrets (API credentials) and any ad-hoc local overrides. See §7. |
-| Distribution / setup | Two `.bat` files at the repo root: `install.bat` (one-time: creates a `.venv`, installs dependencies, seeds `.env` from the template) and `run.bat` (forwards to `manage.py`; bare `run.bat` with no args runs the safe offline default). Goal: clone the repo, run `install.bat` once, then `run.bat` — no manual Python/pip steps. See §4.2. |
+| Distribution / setup | Two `.bat` files at the repo root: `install.bat` (one-time: creates a `.venv`, installs dependencies, seeds `.env` from the template) and `run.bat` (forwards to `manage.py`; bare `run.bat` with no args scrapes the live API, prompting once for credentials if `.env` is empty, then generates the next numbered dashboard and opens it in the browser). Goal: clone the repo on any Windows machine with Python 3.10+, run `install.bat` once, then `run.bat` — no manual Python/pip steps, no manual `.env` editing (the credentials prompt fills it). See §4.2. |
 | Source layout | All Python modules live under `src/` (with `src/db/` as the database-access sub-package), separate from `config/` (JSON config), `data/` (sample input + generated SQLite file), `logs/`, and `reports/` (generated dashboard). See §4.1. |
 
 ## 4. Project Structure
@@ -95,7 +95,8 @@ specification/                        (repo root)
 │   └── etl.log                         # Append-only run log (created at runtime)
 │
 ├── reports/
-│   └── dashboard.html                  # Generated HTML dashboard (created at runtime)
+│   ├── dashboard1.html                 # Generated HTML dashboards (created at runtime; numbered,
+│   └── dashboard2.html ...             #   never overwritten -- each generation takes the next number)
 │
 └── .venv/                              # Virtual environment (created by install.bat; gitignored)
 ```
@@ -117,15 +118,25 @@ work identically either way):
   `pause` ("Press any key to continue . . .") so the summary/errors stay
   on screen — a double-clicked `.bat` file's console window would otherwise
   close instantly on completion, before anything could be read.
-- **`run.bat`** (every time you want to use the pipeline): calls
-  `.venv\Scripts\python.exe src\manage.py`, forwarding all arguments.
-  `run.bat` with **no arguments** (i.e. a plain double-click) defaults to
-  `run.bat run` (the safe offline default: sample data, mocked "mark
-  opened", SQLite) and ends with a `pause` for the same reason as
-  `install.bat`. Any invocation *with* arguments (`run.bat view`,
-  `run.bat run --mode api`, `run.bat dashboard --db sqlserver`, etc.) is
-  forwarded verbatim to `manage.py` and does **not** pause — that path is
-  for an already-open terminal, which stays open on its own.
+- **`run.bat`** (every time you want to use the pipeline). With **no
+  arguments** (i.e. a plain double-click) it:
+  1. Runs `manage.py run --mode api --no-open` — scrapes the live Query
+     API (read-only; mark-opened stays mocked per `COMMAND_MODE`). If
+     `.env` has no `SHOPMETRICS_CLIENT_ID`/`SECRET`, the run prompts for
+     them right in the console, saves them to `.env` (via
+     `config.save_env_values`, which preserves the rest of the file), and
+     verifies them with a real token request before continuing.
+  2. On success, locates the newest `reports\dashboard*.html` (the run just
+     generated the next-numbered one), prints its path, and opens it via
+     `start` — the batch script owns the open step on this path, which is
+     why the Python side is passed `--no-open` (no double-open).
+  3. Ends with a `pause` for the same reason as `install.bat`.
+  Any invocation *with* arguments (`run.bat view`, `run.bat run --mode
+  file`, `run.bat dashboard --db sqlserver`, etc.) is forwarded verbatim to
+  `manage.py` and does **not** pause — that path is for an already-open
+  terminal, which stays open on its own (and there the *Python* side
+  auto-opens newly generated dashboards, unless `--no-open` /
+  `OPEN_DASHBOARD=false`).
 - Every path both scripts touch is anchored to `%~dp0` (the `.bat` file's
   own directory), not the current working directory — so they behave
   identically whether double-clicked (Explorer sets cwd to the file's own
@@ -133,7 +144,13 @@ work identically either way):
 - Both scripts are idempotent and safe to re-run — `install.bat` doesn't
   overwrite an existing `.env`, and re-running it against an existing
   `.venv` just upgrades/reinstalls packages in place; `run.bat` never
-  modifies `.env` or `config/config.json`.
+  modifies `config/config.json`, and touches `.env` only through the
+  credentials prompt above (writing exactly the two credential keys).
+- **Fresh-clone note:** nothing else is needed on a new device — the
+  runtime folders (`data/`, `logs/`, `reports/`) and the SQLite database
+  are all created automatically on first use (`os.makedirs` in
+  `logger.py`/`setup_db.py`/`generate_dashboard.py`), and dashboard
+  numbering simply starts at `dashboard1.html` when `reports/` is empty.
 
 ## 5. Data Model
 
@@ -236,12 +253,13 @@ Sequential flow, no step is silently swallowed:
 4. Load → insert new, skip duplicates.
 5. For each newly inserted survey, call the Command API (mock or live, per `COMMAND_MODE`) to mark it opened.
 6. Finalize the `etl_runs` row and write the run summary to `logs/etl.log`.
-7. Regenerate the HTML dashboard (`generate_dashboard.generate()`) and print a bold cyan callout pointing at it (`Dashboard updated — check it out: <path>`). Wrapped in its own try/except — a dashboard failure is logged as a warning but never fails the run, since it's a convenience layered on top of the actual ETL result, not part of the DoD.
-8. Exit code `0` if the run completed (even with individual survey errors, or a dashboard-generation failure); non-zero only on an unhandled/fatal error in the core pipeline (e.g. DB unreachable).
+7. Generate a **new numbered** HTML dashboard (`generate_dashboard.generate()` → `reports/dashboard<N>.html`, where `N` is one higher than the highest number already present — earlier reports are never overwritten or deleted) and print a bold cyan callout with its full path. Unless `--no-open` was passed or `OPEN_DASHBOARD=false`, the report is then opened in the default browser (`os.startfile` on Windows — identical to double-clicking the file; `webbrowser` elsewhere). Wrapped in its own try/except — a dashboard failure is logged as a warning but never fails the run, since it's a convenience layered on top of the actual ETL result, not part of the DoD. The dashboard itself is a single self-contained file (inline CSS/SVG/JS, no CDN): KPI tiles, a score-distribution chart, status/location/title breakdowns, run history, and a table of **every** stored survey with live search (by ID or any text), sortable columns, and a per-row **Details** modal showing the full record plus `responses_json` rendered per-question (answers as chips, comments quoted, raw JSON collapsible).
+8. Exit code `0` if the run completed (even with individual survey errors, or a dashboard-generation failure); non-zero only on an unhandled/fatal error in the core pipeline (e.g. DB unreachable), or when API credentials are required but missing and can't be prompted for (§4.2).
 
-`etl.py` accepts CLI flags (`--mode`, `--command-mode`, `--db`, `--max-records`)
-that override the corresponding config value for that invocation only —
-neither `.env` nor `config/config.json` is touched. `manage.py run` exposes
+`etl.py` accepts CLI flags (`--mode`, `--command-mode`, `--db`, `--max-records`,
+`--no-open`) that override the corresponding config value for that invocation
+only — `config/config.json` is never touched (and `.env` only by the explicit
+credentials prompt, §4.2). `manage.py run` exposes
 the same flags via a unified entry point that also wraps `view_data.py`,
 `browse_surveys.py`, `generate_dashboard.py`, and `src/db/setup_db.py` (see
 `manage.py view|browse|dashboard|setup-db`).
@@ -276,7 +294,8 @@ either file.
 | `COMMAND_MODE` | `"mock"` | `mock` or `live`. |
 | `SHOPMETRICS_BASE_URL` | `"https://training212.shopmetrics.com"` | Shopmetrics site base URL. |
 | `SHOPMETRICS_CLIENT_OR_FORM_IDS` | `"-995"` | `ClientOrFormIDs` filter value for the Query API. Account-specific placeholder. |
-| `SHOPMETRICS_MAX_RECORDS_PER_RUN` | `10` | Caps survey instances pulled per run in `api` mode. |
+| `SHOPMETRICS_MAX_RECORDS_PER_RUN` | `5000` | Caps survey instances pulled per run in `api` mode. Set high enough to collect this account's full backlog (~1800) in one run; still just 2 API calls per run regardless of row count, so within fair use (APIINT). Lower per-run via `--max-records`. |
+| `OPEN_DASHBOARD` | `"true"` | Auto-open the newly generated `reports/dashboard<N>.html` in the default browser after `run`/`dashboard`. Per-run opt-out: `--no-open`. |
 | `SQLSERVER_DRIVER` | `"ODBC Driver 18 for SQL Server"` | ODBC driver name for the SQL Server backend. |
 | `SQLSERVER_SERVER` | `".\\SQLEXPRESS"` | SQL Server instance name (when `DB_BACKEND=sqlserver`). |
 | `SQLSERVER_DATABASE` | `"ShopmetricsETL"` | SQL Server database name; created automatically if missing. |
@@ -297,6 +316,14 @@ so overriding any of them via `.env` or a shell variable needs no translation.
 
 `.env.example` documents these, plus commented-out examples of overriding
 any `config/config.json` key locally without editing the checked-in file.
+
+The two credential keys don't have to be filled in by hand: any run that
+needs the real API (`EXTRACTION_MODE=api` or `COMMAND_MODE=live`) checks for
+them first (`etl.ensure_api_credentials`), and — when running in an
+interactive console — prompts for both values, writes them into `.env`
+(`config.save_env_values`), and verifies them with a real token request
+before proceeding. Non-interactive invocations print instructions and exit
+with code 1 instead of hanging on a prompt.
 
 ## 8. Sample Data Shape (file mode)
 

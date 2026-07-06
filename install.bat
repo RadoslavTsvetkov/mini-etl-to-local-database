@@ -62,9 +62,19 @@ if not exist "%~dp0.env" (
 echo ============================================
 echo  Install complete!
 echo.
-echo  - Edit .env if you want to use the real Shopmetrics API or SQL Server auth.
-echo  - Edit config\config.json to change default settings.
-echo  - Run the program by double-clicking run.bat
+echo  Next step: double-click run.bat. It scrapes surveys from the live
+echo  Shopmetrics API, then generates and opens a new numbered dashboard
+echo  ^(reports\dashboard1.html, dashboard2.html, ...^) in your browser.
+echo.
+echo  - First run: you'll be asked for your Shopmetrics API Client ID and
+echo    Client Secret ^(created in Shopmetrics under Administration -^>
+echo    Tools and Settings -^> Site Settings -^> Other -^> API v2
+echo    Authorization - Client Credentials^). They are saved to .env
+echo    ^(gitignored^) so you're only asked once per machine.
+echo  - Offline instead: run.bat run --mode file ^(sample data, no
+echo    credentials or network needed^).
+echo  - Edit config\config.json to change default settings; .env for
+echo    secrets and local overrides ^(see .env.example^).
 echo ============================================
 echo.
 pause
