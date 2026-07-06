@@ -21,26 +21,9 @@ from logger import get_logger
 logger = get_logger()
 
 
-def ensure_api_credentials() -> bool:
-    """Called before any run that talks to the real Shopmetrics API
-    (EXTRACTION_MODE=api or COMMAND_MODE=live). If .env has no client
-    ID/secret yet, asks for them right here in the console, saves them to
-    .env for next time, and verifies them with a real token request.
-    Returns False (after explaining what to do) when credentials are
-    missing and can't be obtained."""
-    if config.SHOPMETRICS_CLIENT_ID and config.SHOPMETRICS_CLIENT_SECRET:
-        return True
-
-    print(f"\n{BOLD}{YELLOW}Shopmetrics API credentials are not set up yet.{RESET}")
-    print("This run needs the real API, which requires a Client ID and Client Secret")
-    print("(created in Shopmetrics under Administration → Tools and Settings →")
-    print("Site Settings → Other → API v2 Authorization – Client Credentials).\n")
-
-    if not sys.stdin.isatty():
-        print(f"{RED}Fill in SHOPMETRICS_CLIENT_ID and SHOPMETRICS_CLIENT_SECRET in the")
-        print(f".env file (see .env.example), then run this again.{RESET}")
-        return False
-
+def _prompt_for_credentials() -> bool:
+    """Asks for both credential values in the console and writes them to
+    .env. Returns False if the user cancels or leaves either one empty."""
     try:
         client_id = input("  Shopmetrics Client ID: ").strip()
         client_secret = input("  Shopmetrics Client Secret: ").strip()
@@ -59,16 +42,57 @@ def ensure_api_credentials() -> bool:
         {"SHOPMETRICS_CLIENT_ID": client_id, "SHOPMETRICS_CLIENT_SECRET": client_secret}
     )
     print(f"\n{GREEN}Credentials saved to .env (gitignored — they stay on this machine).{RESET}")
-
-    print("Verifying them against the API...", end=" ", flush=True)
-    try:
-        api_client.get_access_token()
-        print(f"{GREEN}OK — starting the run.{RESET}\n")
-    except api_client.ShopmetricsAPIError as e:
-        print(f"\n{RED}Verification failed: {e}{RESET}")
-        print(f"{RED}Double-check the ID/secret in .env (or their status in Shopmetrics) and run again.{RESET}")
-        return False
     return True
+
+
+def ensure_api_credentials() -> bool:
+    """Called before any run that talks to the real Shopmetrics API
+    (EXTRACTION_MODE=api or COMMAND_MODE=live). Missing credentials are
+    asked for right here in the console; credentials the API *rejects*
+    (mistyped, deactivated, or regenerated in Shopmetrics) trigger the same
+    prompt so they can be re-entered and rewritten in .env. Every attempt —
+    including already-saved credentials — is verified with a real token
+    request before the run proceeds (no extra API cost: the token is needed
+    for extraction anyway and is cached for the rest of the run).
+    Returns False (after explaining what to do) when valid credentials
+    can't be obtained."""
+    interactive = sys.stdin.isatty()
+
+    if not (config.SHOPMETRICS_CLIENT_ID and config.SHOPMETRICS_CLIENT_SECRET):
+        print(f"\n{BOLD}{YELLOW}Shopmetrics API credentials are not set up yet.{RESET}")
+        print("This run needs the real API, which requires a Client ID and Client Secret")
+        print("(created in Shopmetrics under Administration → Tools and Settings →")
+        print("Site Settings → Other → API v2 Authorization – Client Credentials).\n")
+        if not interactive:
+            print(f"{RED}Fill in SHOPMETRICS_CLIENT_ID and SHOPMETRICS_CLIENT_SECRET in the")
+            print(f".env file (see .env.example), then run this again.{RESET}")
+            return False
+        if not _prompt_for_credentials():
+            return False
+
+    while True:
+        print("Verifying credentials against the API...", end=" ", flush=True)
+        try:
+            api_client.get_access_token()
+            print(f"{GREEN}OK.{RESET}")
+            return True
+        except api_client.ShopmetricsAPIError as e:
+            print(f"{RED}failed.{RESET}")
+            reason = str(e)[:300]
+            if "Network error" in reason:
+                # Can't tell anything about the credentials if the API is
+                # unreachable — don't ask to rewrite values that may be fine.
+                print(f"{RED}Could not reach the API to verify credentials: {reason}{RESET}")
+                print(f"{RED}Check your connection / SHOPMETRICS_BASE_URL and run again.{RESET}")
+                return False
+            print(f"{RED}The API rejected these credentials: {reason}{RESET}")
+            if not interactive:
+                print(f"{RED}Update SHOPMETRICS_CLIENT_ID / SHOPMETRICS_CLIENT_SECRET in .env")
+                print(f"(or reactivate/regenerate them in Shopmetrics), then run again.{RESET}")
+                return False
+            print(f"\n{YELLOW}Let's re-enter them (the values in .env will be rewritten):{RESET}")
+            if not _prompt_for_credentials():
+                return False
 
 
 def build_arg_parser(add_help: bool = True) -> argparse.ArgumentParser:

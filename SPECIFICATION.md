@@ -121,11 +121,16 @@ work identically either way):
 - **`run.bat`** (every time you want to use the pipeline). With **no
   arguments** (i.e. a plain double-click) it:
   1. Runs `manage.py run --mode api --no-open` — scrapes the live Query
-     API (read-only; mark-opened stays mocked per `COMMAND_MODE`). If
-     `.env` has no `SHOPMETRICS_CLIENT_ID`/`SECRET`, the run prompts for
-     them right in the console, saves them to `.env` (via
-     `config.save_env_values`, which preserves the rest of the file), and
-     verifies them with a real token request before continuing.
+     API (read-only; mark-opened stays mocked per `COMMAND_MODE`).
+     Credentials are verified with a real token request before every API
+     run (no extra API cost — extraction needs the token anyway and it's
+     cached for the run): if `.env` has no `SHOPMETRICS_CLIENT_ID`/`SECRET`
+     **or the API rejects the saved ones** (mistyped, deactivated,
+     regenerated), the run prompts for them right in the console and
+     (re)writes them to `.env` (via `config.save_env_values`, which
+     preserves the rest of the file), re-verifying after each entry. A
+     network failure during verification aborts with an explanation
+     instead of prompting — unreachable is not the same as wrong.
   2. On success, locates the newest `reports\dashboard*.html` (the run just
      generated the next-numbered one), prints its path, and opens it via
      `start` — the batch script owns the open step on this path, which is
@@ -254,7 +259,7 @@ Sequential flow, no step is silently swallowed:
 5. For each newly inserted survey, call the Command API (mock or live, per `COMMAND_MODE`) to mark it opened.
 6. Finalize the `etl_runs` row and write the run summary to `logs/etl.log`.
 7. Generate a **new numbered** HTML dashboard (`generate_dashboard.generate()` → `reports/dashboard<N>.html`, where `N` is one higher than the highest number already present — earlier reports are never overwritten or deleted) and print a bold cyan callout with its full path. Unless `--no-open` was passed or `OPEN_DASHBOARD=false`, the report is then opened in the default browser (`os.startfile` on Windows — identical to double-clicking the file; `webbrowser` elsewhere). Wrapped in its own try/except — a dashboard failure is logged as a warning but never fails the run, since it's a convenience layered on top of the actual ETL result, not part of the DoD. The dashboard itself is a single self-contained file (inline CSS/SVG/JS, no CDN): KPI tiles, a score-distribution chart, status/location/title breakdowns, run history (error counts highlighted when non-zero), and a table of **every** stored survey with live search (by ID or any text), an All/Opened/Not-opened quick filter, sortable columns, and a **Details** modal (opened by clicking any row) showing the full record plus `responses_json` rendered per-question (answers as chips, comments quoted, raw JSON collapsible), with prev/next navigation (buttons or arrow keys) stepping through the currently filtered/sorted rows.
-8. Exit code `0` if the run completed (even with individual survey errors, or a dashboard-generation failure); non-zero only on an unhandled/fatal error in the core pipeline (e.g. DB unreachable), or when API credentials are required but missing and can't be prompted for (§4.2).
+8. Exit code `0` if the run completed (even with individual survey errors, or a dashboard-generation failure); non-zero only on an unhandled/fatal error in the core pipeline (e.g. DB unreachable), or when API credentials are required but missing/rejected and can't be (re-)prompted for (§4.2).
 
 `etl.py` accepts CLI flags (`--mode`, `--command-mode`, `--db`, `--max-records`,
 `--no-open`) that override the corresponding config value for that invocation
@@ -318,12 +323,16 @@ so overriding any of them via `.env` or a shell variable needs no translation.
 any `config/config.json` key locally without editing the checked-in file.
 
 The two credential keys don't have to be filled in by hand: any run that
-needs the real API (`EXTRACTION_MODE=api` or `COMMAND_MODE=live`) checks for
-them first (`etl.ensure_api_credentials`), and — when running in an
-interactive console — prompts for both values, writes them into `.env`
-(`config.save_env_values`), and verifies them with a real token request
-before proceeding. Non-interactive invocations print instructions and exit
-with code 1 instead of hanging on a prompt.
+needs the real API (`EXTRACTION_MODE=api` or `COMMAND_MODE=live`) verifies
+them first (`etl.ensure_api_credentials`) with a real token request. When
+running in an interactive console, missing credentials are prompted for,
+and credentials the token endpoint *rejects* (HTTP 400 `invalid_client` —
+mistyped, deactivated, or regenerated in Shopmetrics) trigger the same
+prompt so they can be re-entered; each entry is written into `.env`
+(`config.save_env_values`) and re-verified before the run proceeds. A
+network failure during verification aborts without prompting (the saved
+values may be fine). Non-interactive invocations print instructions and
+exit with code 1 instead of hanging on a prompt.
 
 ## 8. Sample Data Shape (file mode)
 

@@ -28,7 +28,10 @@ mark-opened step stays mocked), refreshes the dashboard, opens it in your
 browser, then waits for a key press so you can read the output. The first
 time, if `.env` has no API credentials yet, it asks for your Client ID and
 Client Secret right in the console, saves them to `.env`, and verifies them
-before continuing (§4.1 explains where these come from).
+before continuing (§4.1 explains where these come from). The same happens
+if the saved credentials are **wrong** — every API run verifies them
+upfront, and if Shopmetrics rejects them (mistyped, deactivated, or
+regenerated), you're asked to re-enter them and `.env` is rewritten.
 
 To use the other commands (`view`, `browse`, `dashboard`, `setup-db`, or any
 flag), open a terminal in this folder instead and run `run.bat <command>
@@ -57,9 +60,10 @@ run.bat run --mode file   (explicitly offline)
 ```
 
 Double-clicking `run.bat` pulls real surveys from the Shopmetrics Query API
-(read-only) and simulates the "mark opened" step. If credentials are missing
-from `.env`, it prompts for them once, saves them, and verifies them against
-the API before running. The explicit `run.bat run` command still follows
+(read-only) and simulates the "mark opened" step. Credentials are verified
+against the API before every run: if they're missing from `.env` — or
+saved but rejected by Shopmetrics — you're prompted to (re-)enter them and
+`.env` is updated. The explicit `run.bat run` command still follows
 `config/config.json` defaults (`file`/`mock` — offline sample data). Either
 way it's safe to run repeatedly; records already loaded are skipped as
 duplicates.
@@ -317,7 +321,12 @@ you want the full dataset in both places.
 - **HTTP 403 / Cloudflare error 1010**: already handled — `api_client.py`
   sends a browser-style `User-Agent` header, which this site's WAF requires.
 - **"SHOPMETRICS_CLIENT_ID / SHOPMETRICS_CLIENT_SECRET are not set"**: you're
-  in `api`/`live` mode without a filled-in `.env`. Follow §4.1 above.
+  in `api`/`live` mode without a filled-in `.env`. Follow §4.1 above, or just
+  run from a console and enter them at the prompt.
+- **"The API rejected these credentials" (HTTP 400 `invalid_client`)**: the
+  values in `.env` are wrong — mistyped, swapped, deactivated, or regenerated
+  in Shopmetrics. Run from a console to be prompted for fresh values (they're
+  rewritten into `.env`), or fix the two lines by hand.
 - **SQL Server: "Login failed" / driver not found**: confirm SSMS or SQL
   Server Express is installed, and that `install.bat` completed the pyodbc
   install step without error. Check `SQLSERVER_SERVER` matches your actual
