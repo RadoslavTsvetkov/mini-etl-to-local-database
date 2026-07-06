@@ -120,14 +120,22 @@ skip that; the file also opens fine by double-clicking it later — no server
 needed). It
 includes KPI tiles (total surveys, opened, average score, errors), a score
 distribution chart, breakdowns by status/location/title, recent run history,
-and a table of **every** survey in the database — hover any bar for exact
-counts and percentages, click any column header to sort, and use the search
-box to find a survey by its ID (or any title/location/fieldworker text).
-Every row has a **Details** button that opens the survey's full record —
-all stored fields plus the responses (`responses_json`) rendered as
-question-by-question answer chips and comments, with the raw JSON one click
-away. Supports light and dark mode automatically (follows your OS/browser
-theme).
+and a table of **every** survey in the database. Working with the table:
+
+- **Search** by survey ID (or any title/location/fieldworker text) and
+  narrow further with the **All / Opened / Not opened** filter buttons —
+  the match counter updates live.
+- **Click any row** (or its Details button) to open the survey's full
+  record — all stored fields plus the responses (`responses_json`) rendered
+  as question-by-question answer chips and comments, with the raw JSON one
+  click away.
+- **Step through surveys** without closing the detail view: the ‹ › buttons
+  (or the ←/→ arrow keys) move through exactly the rows your current
+  search/filter/sort shows.
+- **Sort** by clicking any column header; hover any chart bar for exact
+  counts and percentages.
+
+Supports light and dark mode automatically (follows your OS/browser theme).
 
 ## 3. Using SQL Server / SSMS instead of (or alongside) SQLite
 

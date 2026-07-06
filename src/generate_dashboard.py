@@ -328,7 +328,27 @@ _STYLE = """
   .chip-muted { color: var(--text-muted); background: var(--row-hover); }
   .yes { color: var(--good); }
   .no { color: var(--text-muted); }
-  .table-wrap { max-height: 560px; overflow-y: auto; }
+  .table-wrap { max-height: 70vh; overflow-y: auto; }
+  th:empty { cursor: default; }
+  th:empty::after { content: none; }
+  #survey-tbody tr { cursor: pointer; }
+  .empty-cell { text-align: center; color: var(--text-muted); padding: 26px 0; }
+  .err-count { color: var(--bad); font-weight: 600; }
+  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; flex: none; }
+  .seg-btn {
+    font: inherit; font-size: 12px; padding: 7px 13px; background: transparent;
+    border: none; border-right: 1px solid var(--border); color: var(--text-secondary); cursor: pointer;
+  }
+  .seg-btn:last-child { border-right: none; }
+  .seg-btn:hover { background: var(--row-hover); }
+  .seg-btn.active { background: var(--series-1); color: #fff; }
+  #modal-nav { display: flex; gap: 6px; }
+  #modal-nav button {
+    font: inherit; font-size: 16px; line-height: 1; padding: 5px 11px; background: transparent;
+    border: 1px solid var(--border); border-radius: 8px; color: var(--text-secondary); cursor: pointer;
+  }
+  #modal-nav button:hover:not(:disabled) { background: var(--row-hover); color: var(--text-primary); }
+  #modal-nav button:disabled { opacity: 0.35; cursor: default; }
   .toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
   .toolbar input[type=search] {
     flex: 1; min-width: 220px; max-width: 440px; padding: 8px 12px; font: inherit; font-size: 13px;
@@ -406,6 +426,10 @@ _SCRIPT = """
         <h3 id="modal-title"></h3>
         <div id="modal-sub"></div>
       </div>
+      <div id="modal-nav">
+        <button id="modal-prev" aria-label="Previous survey" title="Previous survey (&#8592;)">&#8249;</button>
+        <button id="modal-next" aria-label="Next survey" title="Next survey (&#8594;)">&#8250;</button>
+      </div>
       <button id="modal-close" aria-label="Close">&#10005;</button>
     </div>
     <div id="modal-body"></div>
@@ -437,6 +461,7 @@ _SCRIPT = """
   document.querySelectorAll("[data-tip-label]").forEach(bindTip);
 
   document.querySelectorAll("table.sortable thead th").forEach(function (th, _, ths) {
+    if (!th.textContent.trim()) return;   /* the Details-button column doesn't sort */
     var idx = Array.prototype.indexOf.call(th.parentNode.children, th);
     th.addEventListener("click", function () {
       var table = th.closest("table");
@@ -444,7 +469,9 @@ _SCRIPT = """
       var dir = th.classList.contains("sort-asc") ? -1 : 1;
       table.querySelectorAll("th").forEach(function (h) { h.classList.remove("sort-asc", "sort-desc"); });
       th.classList.add(dir === 1 ? "sort-asc" : "sort-desc");
-      var rows = Array.prototype.slice.call(tbody.rows);
+      var rows = Array.prototype.slice.call(tbody.rows).filter(function (r) {
+        return !r.classList.contains("empty-row");
+      });
       rows.sort(function (a, b) {
         var av = a.cells[idx].textContent.trim(), bv = b.cells[idx].textContent.trim();
         var an = parseFloat(av.replace(/,/g, "")), bn = parseFloat(bv.replace(/,/g, ""));
@@ -455,7 +482,7 @@ _SCRIPT = """
     });
   });
 
-  /* ---- Survey search (by ID or any text) ---- */
+  /* ---- Survey search + opened filter ---- */
   var search = document.getElementById("survey-search");
   var searchCount = document.getElementById("search-count");
   var surveyTbody = document.getElementById("survey-tbody");
@@ -466,21 +493,44 @@ _SCRIPT = """
       for (var i = 0; i < row.cells.length - 1; i++) parts.push(row.cells[i].textContent);
       return parts.join(" ").toLowerCase();
     });
-    var updateCount = function (shown) {
+    var rowOpened = allRows.map(function (row) {
+      return row.cells[6].textContent.indexOf("Yes") !== -1;
+    });
+
+    var emptyRow = document.createElement("tr");
+    emptyRow.className = "empty-row";
+    var emptyCell = document.createElement("td");
+    emptyCell.colSpan = 10;
+    emptyCell.className = "empty-cell";
+    emptyCell.textContent = "No surveys match — clear the search or switch the filter.";
+    emptyRow.appendChild(emptyCell);
+    emptyRow.style.display = "none";
+    surveyTbody.appendChild(emptyRow);
+
+    var openedFilter = "all";
+    var applyFilter = function () {
+      var q = search.value.trim().toLowerCase();
+      var shown = 0;
+      allRows.forEach(function (row, idx) {
+        var match = (!q || rowText[idx].indexOf(q) !== -1) &&
+          (openedFilter === "all" || (openedFilter === "yes") === rowOpened[idx]);
+        row.style.display = match ? "" : "none";
+        if (match) shown++;
+      });
+      emptyRow.style.display = shown ? "none" : "";
       searchCount.textContent = shown === allRows.length
         ? allRows.length.toLocaleString() + " surveys"
         : shown.toLocaleString() + " of " + allRows.length.toLocaleString() + " surveys match";
     };
-    updateCount(allRows.length);
-    search.addEventListener("input", function () {
-      var q = search.value.trim().toLowerCase();
-      var shown = 0;
-      allRows.forEach(function (row, idx) {
-        var match = !q || rowText[idx].indexOf(q) !== -1;
-        row.style.display = match ? "" : "none";
-        if (match) shown++;
+    applyFilter();
+    search.addEventListener("input", applyFilter);
+    document.querySelectorAll("#opened-filter .seg-btn").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        openedFilter = btn.dataset.filter;
+        document.querySelectorAll("#opened-filter .seg-btn").forEach(function (b) { b.classList.remove("active"); });
+        btn.classList.add("active");
+        applyFilter();
       });
-      updateCount(shown);
     });
   }
 
@@ -495,6 +545,21 @@ _SCRIPT = """
   var modalTitle = document.getElementById("modal-title");
   var modalSub = document.getElementById("modal-sub");
   var closeBtn = document.getElementById("modal-close");
+  var prevBtn = document.getElementById("modal-prev");
+  var nextBtn = document.getElementById("modal-next");
+
+  /* Prev/next walks the surveys currently visible in the table, in its
+     current sort order — so it navigates exactly what the reader filtered. */
+  var navList = [], navIdx = -1;
+  function computeNavList() {
+    navList = [];
+    if (!surveyTbody) return;
+    Array.prototype.forEach.call(surveyTbody.rows, function (row) {
+      if (row.style.display !== "none" && !row.classList.contains("empty-row")) {
+        navList.push(row.cells[0].textContent.trim());
+      }
+    });
+  }
 
   function el(tag, cls, text) {
     var n = document.createElement(tag);
@@ -512,11 +577,17 @@ _SCRIPT = """
   }
 
 
-  function openModal(sid) {
+  function openModal(sid, keepNav) {
     var d = DETAILS[sid];
     if (!d) return;
+    if (!keepNav) computeNavList();
+    navIdx = navList.indexOf(sid);
+    prevBtn.disabled = navIdx <= 0;
+    nextBtn.disabled = navIdx < 0 || navIdx >= navList.length - 1;
+
     modalTitle.textContent = d.title || "(untitled survey)";
-    modalSub.textContent = "Survey ID " + sid + (d.date ? " · " + String(d.date).slice(0, 10) : "");
+    var pos = navIdx >= 0 ? " · " + (navIdx + 1).toLocaleString() + " of " + navList.length.toLocaleString() + " shown" : "";
+    modalSub.textContent = "Survey ID " + sid + (d.date ? " · " + String(d.date).slice(0, 10) : "") + pos;
     modalBody.textContent = "";
 
     var grid = el("div", "meta-grid");
@@ -585,10 +656,29 @@ _SCRIPT = """
     var btn = e.target.closest ? e.target.closest(".btn-details") : null;
     if (btn) openModal(btn.dataset.sid);
   });
+  if (surveyTbody) {
+    /* The whole row is a Details target, not just the button */
+    surveyTbody.addEventListener("click", function (e) {
+      if (e.target.closest(".btn-details")) return;   /* button handler covers it */
+      var row = e.target.closest("tr");
+      if (!row || row.classList.contains("empty-row")) return;
+      openModal(row.cells[0].textContent.trim());
+    });
+  }
+  function navStep(delta) {
+    var target = navIdx + delta;
+    if (navIdx < 0 || target < 0 || target >= navList.length) return;
+    openModal(navList[target], true);
+  }
+  prevBtn.addEventListener("click", function () { navStep(-1); });
+  nextBtn.addEventListener("click", function () { navStep(1); });
   closeBtn.addEventListener("click", closeModal);
   backdrop.addEventListener("click", function (e) { if (e.target === backdrop) closeModal(); });
   document.addEventListener("keydown", function (e) {
-    if (e.key === "Escape" && backdrop.classList.contains("open")) closeModal();
+    if (!backdrop.classList.contains("open")) return;
+    if (e.key === "Escape") closeModal();
+    else if (e.key === "ArrowLeft") navStep(-1);
+    else if (e.key === "ArrowRight") navStep(1);
   });
 })();
 </script>
@@ -622,11 +712,16 @@ def render_html(data: dict) -> str:
         + stat_tile("ETL runs", f"{data['run_count']:,}")
     )
 
+    def _err_cell(count) -> str:
+        if count:
+            return f'<td><span class="err-count">{_esc(count)}</span></td>'
+        return f"<td>{_esc(count)}</td>"
+
     runs_rows = "".join(
         f'<tr><td>{_esc(r[0])}</td><td>{_esc(r[1])[:19].replace("T", " ")}</td>'
         f'<td>{_run_status_chip(r[2])}</td>'
         f'<td>{_esc(r[3])}</td><td>{_esc(r[4])}</td><td>{_esc(r[5])}</td>'
-        f'<td>{_esc(r[6])}</td><td>{_esc(r[7])}</td></tr>'
+        f'<td>{_esc(r[6])}</td>{_err_cell(r[7])}</tr>'
         for r in data["runs"]
     )
 
@@ -690,9 +785,14 @@ def render_html(data: dict) -> str:
 </div>
 
 <div class="card">
-  <h2>All surveys <span class="count">· click a column to sort · Details shows the full record and responses</span></h2>
+  <h2>All surveys <span class="count">· click any row for full details &amp; responses · click a column header to sort</span></h2>
   <div class="toolbar">
-    <input id="survey-search" type="search" placeholder="Search by survey ID — or any title, location, fieldworker, status…" />
+    <input id="survey-search" type="search" placeholder="Search by ID, title, location, fieldworker…" />
+    <div class="seg" id="opened-filter" role="group" aria-label="Filter by opened status">
+      <button class="seg-btn active" data-filter="all">All</button>
+      <button class="seg-btn" data-filter="yes">Opened</button>
+      <button class="seg-btn" data-filter="no">Not opened</button>
+    </div>
     <span id="search-count" class="count"></span>
   </div>
   <div class="table-wrap">
