@@ -127,8 +127,10 @@ OPEN_DASHBOARD = os.environ.get("OPEN_DASHBOARD", "true").strip().lower() in ("1
 LOG_PATH = _resolve_path(os.environ.get("LOG_PATH", "logs/etl.log"))
 
 # --- Pipeline mode switches ---
-# "file" reads SURVEYS_SOURCE_PATH; "api" calls the real Shopmetrics Query API v2.
-EXTRACTION_MODE = os.environ.get("EXTRACTION_MODE", "file")
+# "api" calls the real Shopmetrics Query API v2 (the default -- a new
+# install should scrape real data out of the box, not sample data); "file"
+# reads SURVEYS_SOURCE_PATH instead, for fully offline/no-credentials use.
+EXTRACTION_MODE = os.environ.get("EXTRACTION_MODE", "api")
 # "mock" simulates a successful Command API call; "live" calls the real endpoint.
 COMMAND_MODE = os.environ.get("COMMAND_MODE", "mock")
 

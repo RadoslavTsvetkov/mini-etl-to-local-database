@@ -13,7 +13,7 @@ A small, self-contained Python ETL pipeline that:
 3. **Marks** each newly loaded survey as "opened" (`BulkProcessing_SetReadStatus`, flipping the same `IsSurveyInstanceViewedBySecurityUser` field the extraction filters on) via the real Shopmetrics Command API v2.
 4. **Logs** every run (date, counts, errors) to a log file.
 
-The pipeline runs end-to-end via a single entry point, `etl.py`. The *checked-in config defaults* remain **mock/offline** (file extraction + simulated Command API) so `manage.py run` always works without network access or credentials; the primary Windows entry point, a bare double-clicked `run.bat`, passes `--mode api` and therefore **scrapes the live Query API by default** (read-only; mark-opened stays mocked), prompting once for API credentials if `.env` doesn't have them (§4.2). After every run a new *numbered* HTML dashboard is generated (`reports/dashboard1.html`, `dashboard2.html`, …; older reports are kept) and opened in the default browser automatically.
+The pipeline runs end-to-end via a single entry point, `etl.py`. The *checked-in config default* is **`EXTRACTION_MODE=api`** — a fresh install should scrape real data out of the box, not sample data — so `manage.py run` with no flags at all, `run.bat run`, and a bare double-clicked `run.bat` all **scrape the live Query API by default** (read-only; mark-opened stays mocked, `COMMAND_MODE=mock`, since the real Command API call is currently broken upstream — §10.3), prompting once for API credentials if `.env` doesn't have them (§4.2). `EXTRACTION_MODE=file` (offline sample data, no network/credentials) is the explicit opt-in alternative, via `--mode file`, for trying the pipeline out or testing without touching the real API. After every run a new *numbered* HTML dashboard is generated (`reports/dashboard1.html`, `dashboard2.html`, …; older reports are kept) and opened in the default browser automatically.
 
 ## 2. How This Maps to the Real Shopmetrics API
 
@@ -39,10 +39,10 @@ Everything below is taken from `_KNOWLEDGEBASE/023-APIs/`, not invented. Article
 | Question | Decision |
 |---|---|
 | Database | Configurable via `DB_BACKEND`: SQLite (default, file-based, zero-install) or local SQL Server / SSMS (`DB_BACKEND=sqlserver`, requires `pyodbc`). Same logical schema either way — see `schema.md`. |
-| Extraction source | Configurable: `EXTRACTION_MODE=file` (default) reads `data/sample_surveys.json`; `EXTRACTION_MODE=api` calls the real Query API v2 as described in §2. |
+| Extraction source | Configurable: `EXTRACTION_MODE=api` (**default**) calls the real Query API v2 as described in §2 — a fresh install should scrape real data out of the box; `EXTRACTION_MODE=file` reads `data/sample_surveys.json` instead, the explicit offline/no-credentials opt-in. |
 | Command API mode | Configurable: `COMMAND_MODE=mock` (default) simulates a successful "mark opened" call with no network access; `COMMAND_MODE=live` calls the real Command API v2. |
 | Base URL | `SHOPMETRICS_BASE_URL`, default `https://training212.shopmetrics.com` (a Shopmetrics training/sandbox site, per APIINV3's recommendation to test against training before production). |
-| Auth credentials | `SHOPMETRICS_CLIENT_ID` / `SHOPMETRICS_CLIENT_SECRET` — account-specific, must be created by an admin in Shopmetrics (Administration → Tools and Settings → Site Settings → Other → API v2 Authorization – Client Credentials, per APIAUT). Unset by default; only required when `EXTRACTION_MODE=api` or `COMMAND_MODE=live`. |
+| Auth credentials | `SHOPMETRICS_CLIENT_ID` / `SHOPMETRICS_CLIENT_SECRET` — account-specific, must be created by an admin in Shopmetrics (Administration → Tools and Settings → Site Settings → Other → API v2 Authorization – Client Credentials, per APIAUT). Unset in `.env.example`; required since `EXTRACTION_MODE=api` is the default (prompted for interactively and saved automatically the first time — §4.2/§7.2 — rather than needing to be filled in by hand before the first run). |
 | Client/Form scope | `SHOPMETRICS_CLIENT_OR_FORM_IDS` — the `ClientOrFormIDs` filter value(s) for the Query API; account-specific, must be looked up via the `Parameter_ClientOrFormIDs` dataset (APICAP). Placeholder default `-995`. |
 | Configuration format | Split in two: **`config/config.json`** (checked into git) holds all non-secret settings and defaults; **`.env`** (gitignored) holds secrets (API credentials) and any ad-hoc local overrides. See §7. |
 | Distribution / setup | Two `.bat` files at the repo root: `install.bat` (one-time: creates a `.venv`, installs dependencies, seeds `.env` from the template) and `run.bat` (forwards to `manage.py`; bare `run.bat` with no args scrapes the live API, prompting once for credentials if `.env` is empty, then generates the next numbered dashboard and opens it in the browser). Goal: clone the repo on any Windows machine with Python 3.10+, run `install.bat` once, then `run.bat` — no manual Python/pip steps, no manual `.env` editing (the credentials prompt fills it). See §4.2. |
@@ -211,6 +211,17 @@ it's specifically `python src/menu.py`, or just double-click `run.bat`).
   so an accidental keypress can't close the menu — only an explicit
   `0`/`exit`/`quit`/`q` does. An unrecognized entry prints a one-line
   correction and re-prompts, never exits or crashes.
+- **True EOF is not the same as a blank Enter, and is handled separately.**
+  Both `input()` scenarios raise the same `EOFError`/return the same `""`
+  on the surface, but collapsing them was a real bug: once stdin actually
+  reaches EOF (closed, or redirected input that ran out), every further
+  `input()` call keeps raising `EOFError` immediately, so treating it like
+  a blank Enter (reprint the menu, loop again) span forever — reproduced
+  directly (the process's own output hit 59MB in ~7 seconds before being
+  killed). `main()`'s loop uses a dedicated `_ask_top()` that returns
+  `None` specifically on EOF, distinct from `_ask()`'s `""` used by every
+  other (single-read, non-looping) prompt in the file, so the top-level
+  loop can exit cleanly instead of spinning.
 - `sys.stdout.reconfigure(encoding="utf-8", errors="replace")` at import
   time (matching the existing pattern in `view_data.py`/`browse_surveys.py`)
   — without it, Python falls back to a non-UTF-8 default encoding for
@@ -298,11 +309,11 @@ One row per pipeline execution — the durable record backing the log file.
 
 ### 6.1 Extract (`extract.py`)
 
-- `EXTRACTION_MODE=file` (default): reads `data/sample_surveys.json`. Each record has at least `survey_id`, `client_or_form_id`, `survey_title`, `location_store_id`, `location_name`, `submitted_at`, `score`, `responses`.
-- `EXTRACTION_MODE=api`: calls `api_client.query_new_surveys()`, which:
+- `EXTRACTION_MODE=api` (**default**): calls `api_client.query_new_surveys()`, which:
   1. Runs the `ClientAnalytics` dataset with `QuerySpecification` including `SurveyStatusName`, `AttachmentsCount`, `Login`, `Shopper Name`, `WorkflowStepID`, `Campaign`, `IsSurveyInstanceViewedBySecurityUser`, and `[WHERE:IsSurveyInstanceViewedBySecurityUser|0]`, filtered by `SHOPMETRICS_CLIENT_OR_FORM_IDS`.
   2. Collects the returned `InstanceID`s and runs a second `ClientAnalytics` call with `QuerySpecification: [InstanceID][QuestionID][ProtoAnswerText][Question Comment]` filtered by `SurveyInstanceIDs` to get responses.
   3. Merges both into the same normalized record shape as file mode.
+- `EXTRACTION_MODE=file`: reads `data/sample_surveys.json` instead — no network, no credentials. Each record has at least `survey_id`, `client_or_form_id`, `survey_title`, `location_store_id`, `location_name`, `submitted_at`, `score`, `responses`.
 - Malformed records are skipped and counted as errors, not fatal to the run.
 
 ### 6.2 Load (`load.py`)
@@ -392,7 +403,7 @@ either file.
 | `DB_PATH` | `"data/etl.db"` | SQLite file location (when `DB_BACKEND=sqlite`). Relative paths resolve against the repo root. |
 | `SURVEYS_SOURCE_PATH` | `"data/sample_surveys.json"` | Extraction input for file mode. |
 | `LOG_PATH` | `"logs/etl.log"` | Log file location. |
-| `EXTRACTION_MODE` | `"file"` | `file` or `api`. |
+| `EXTRACTION_MODE` | `"api"` | `api` (default — real Query API) or `file` (offline sample data). |
 | `COMMAND_MODE` | `"mock"` | `mock` or `live`. |
 | `SHOPMETRICS_BASE_URL` | `"https://training212.shopmetrics.com"` | Shopmetrics site base URL. |
 | `SHOPMETRICS_CLIENT_OR_FORM_IDS` | `"-995"` | `ClientOrFormIDs` filter value for the Query API. Account-specific placeholder. |
@@ -454,20 +465,22 @@ exit with code 1 instead of hanging on a prompt.
 
 | DoD item | Satisfied by |
 |---|---|
-| `etl.py` runs end to end on sample data without errors | §6.5 flow over `data/sample_surveys.json` in default `EXTRACTION_MODE=file` / `COMMAND_MODE=mock` |
+| `etl.py` runs end to end on sample data without errors | §6.5 flow over `data/sample_surveys.json` via `EXTRACTION_MODE=file` (`--mode file`) / `COMMAND_MODE=mock` — `file` was the checked-in default when this DoD item was first satisfied; `api` is the default now (§1), so this path is reached explicitly rather than by default |
 | Schema documented | `schema.md` / `src/db/schema.sql` (§5) |
 | Sample records appear in DB after a run | `load.py` insert step (§6.2) |
 | Each loaded survey marked opened (real or simulated) | `api_client.py` (§6.3): mock by default, real `BulkProcessing_SetReadStatus` call when `COMMAND_MODE=live` |
 | Log file shows a completed run with counts/errors | `logger.py` + `logs/etl.log` (§6.4) |
 
-## 10. Switching to the Real API
+## 10. Setting Up Against the Real API
 
-To run against a real Shopmetrics training/production site:
+`EXTRACTION_MODE=api` is the checked-in default (§1/§3) — no mode switch
+needed. What's left is the one-time *account* setup before that default can
+actually authenticate against a real Shopmetrics training/production site:
 
 1. Create a Restricted-role user + API Client Credentials in Shopmetrics (Administration → Tools and Settings → Site Settings → Other → API v2 Authorization – Client Credentials). See APIAUT.
 2. Look up your `ClientOrFormIDs` value via the `Parameter_ClientOrFormIDs` dataset (APICAP).
-3. Put `SHOPMETRICS_CLIENT_ID` and `SHOPMETRICS_CLIENT_SECRET` in `.env` (copy `.env.example` if you haven't already — `install.bat` does this automatically). Set `SHOPMETRICS_BASE_URL` and `SHOPMETRICS_CLIENT_OR_FORM_IDS` either in `.env` or in `config/config.json`.
-4. Run `run.bat run --mode api --command-mode live` (or `python src/manage.py run --mode api --command-mode live` without the bat file). The training site is recommended before production (APIINV3).
+3. Put `SHOPMETRICS_CLIENT_ID` and `SHOPMETRICS_CLIENT_SECRET` in `.env` — or just run the pipeline and answer the interactive prompt (§4.2), which writes them for you (copy `.env.example` to `.env` yourself only if you're doing this by hand — `install.bat` already does this automatically). Set `SHOPMETRICS_BASE_URL` and `SHOPMETRICS_CLIENT_OR_FORM_IDS` either in `.env` or in `config/config.json` if they differ from the checked-in training-site defaults.
+4. Run `run.bat` (or `python src/manage.py run` without the bat file) — that's the default now. Add `--command-mode live` only if you specifically want to test the real "mark opened" call (currently broken upstream, §10.3). The training site is recommended before production (APIINV3).
 
 ### 10.1 Verified against the real training212 account
 

@@ -24,6 +24,92 @@ without a very good reason — this constraint is deliberate and has been
 maintained through several rounds of feature additions (a local delete/edit
 web UI included).
 
+## Quickstart — zero to scraping real surveys on a brand-new machine
+
+This is the exact, mechanical procedure. Follow it in order; every step
+says what should happen so you can tell immediately if something's wrong.
+
+**Prerequisites:** Windows (primary target; see "cross-platform" below for
+Mac/Linux), Python 3.10 or newer on `PATH`. Nothing else — no database
+server, no Node, no build tools.
+
+**Step 1 — Install.** From the repo root, double-click `install.bat` (or
+run it from a terminal: `.\install.bat`). This creates `.venv\`, installs
+dependencies (none for SQLite; `pyodbc` for the optional SQL Server
+backend), and copies `.env.example` to `.env` if `.env` doesn't already
+exist. It ends with "Install complete!" and a pause. If it instead says
+Python wasn't found or is too old, install Python 3.10+ from
+python.org (check "Add python.exe to PATH") and re-run.
+
+**Step 2 — Get Shopmetrics API credentials.** You need exactly two pieces
+of information from whoever administers the target Shopmetrics site:
+a **Client ID** and a **Client Secret**. These are created in the
+Shopmetrics web UI at: **Administration → Tools and Settings → Site
+Settings → Other → API v2 Authorization – Client Credentials** (an admin
+user creates a "Create New" entry there and can auto-generate the secret).
+Nothing else is required — the site URL (`https://training212.shopmetrics.com`)
+and the client/account scope (`ClientOrFormIDs=-995`) are already the
+checked-in defaults in `config/config.json`, matching the account this
+project has been built and tested against ("Delight Coffee (CX Analytics
+Demo)"). If you're pointing this at a *different* Shopmetrics site or
+account, change `SHOPMETRICS_BASE_URL`/`SHOPMETRICS_CLIENT_OR_FORM_IDS` in
+`config/config.json` (or `.env` for a local-only override) — see
+"Configuration system" below.
+
+**Step 3 — Run it.** Double-click `run.bat` (or from a terminal:
+`.\run.bat`, or cross-platform `python src/manage.py run`). Two outcomes:
+
+- **First time, credentials not yet saved:** the console prints "Shopmetrics
+  API credentials are not set up yet" and prompts:
+  ```
+    Shopmetrics Client ID:
+    Shopmetrics Client Secret:
+  ```
+  Paste in the two values from Step 2 (typing is fine too — paste just
+  saves keystrokes). It then prints "Credentials saved to .env" and
+  "Verifying credentials against the API... OK." and the run proceeds
+  immediately — you do **not** need to re-run the command.
+- **Already saved (this or a later run):** it goes straight to "Verifying
+  credentials against the API... OK." with no prompt.
+
+Either way, what happens next is the actual scrape:
+```
+=== ETL run starting (EXTRACTION_MODE=api, COMMAND_MODE=mock) ===
+Extracted 1804 survey record(s)
+Loaded 1804 new survey(s), skipped 0 duplicate(s)
+Marked survey <id> as opened (request_id=MOCK-REQUEST-<id>)   [one line per survey]
+=== ETL run finished: status=success extracted=1804 loaded=1804 duplicates=0 marked_opened=1804 errors=0 ===
+Dashboard updated (opened in your browser): C:\...\reports\dashboard1.html
+```
+**1804 is the current live count** of unopened survey instances under
+`ClientOrFormIDs=-995` on the configured account — this number will drift
+over time as new surveys are submitted and/or marked opened elsewhere, and
+is themselves a live fact from the API, not a constant to hardcode
+anywhere. On a second run, "Extracted" stays the same or grows, but
+"Loaded" drops to near-zero and "duplicates" rises to match, since
+already-loaded surveys are skipped (see "Configuration system" for exactly
+why re-running doesn't re-download from scratch).
+
+Bare `run.bat` then drops you into a numbered menu (§ "The interactive
+menu" below) — type `0` or `exit` to close it.
+
+**If you only see "Extracted 3 survey record(s)" instead of ~1800+:** that
+3 is the file-mode sample-data count (`data/sample_surveys.json` has
+exactly 3 records), meaning `EXTRACTION_MODE` resolved to `file`, not
+`api`, for this run — go straight to "Troubleshooting: why am I only
+getting 3 surveys" further down; don't assume the API integration is
+broken, because the far more likely cause is a stale override sitting in
+front of the (already-`api`) default.
+
+**Cross-platform (no `.bat` files):** every step above has a direct
+equivalent — `python -m venv .venv` + `pip install -r requirements.txt`
+instead of `install.bat`; `python src/manage.py run` (from the activated
+venv) instead of `run.bat`. The credentials prompt, the extraction count,
+and everything else behaves identically; only the `.bat` convenience
+wrappers and `os.startfile()`-based dashboard auto-open are Windows-only
+(the dashboard still gets *written*, just opened via `webbrowser.open()`
+on other platforms — see `generate_dashboard.open_in_browser()`).
+
 ## Read these first, in this order
 
 1. **`README.md`** — user-facing usage guide. If you're asked to change
@@ -131,6 +217,68 @@ rejects them* (HTTP 400 `invalid_client` re-triggers the same prompt).
 writes to the real project's `data/backups/` regardless of which database
 was actually read. Keep this in mind if you're testing delete operations
 against a copy: the backup JSON still lands in the real repo.
+
+**Trap: changing a `config/config.json` default doesn't change behavior if
+`.env` has a stale explicit override for that same key.** Since `.env` is
+loaded *before* `config.json` (both via `setdefault`), a leftover line like
+`EXTRACTION_MODE=file` in a real `.env` — e.g. from earlier local testing —
+silently keeps winning even after `config.json`'s own default is edited to
+`api`. This bit exactly this project once: `EXTRACTION_MODE` was changed to
+default to `api` in `config.json`, but the repo's own working `.env` still
+had an explicit `EXTRACTION_MODE=file` line from earlier sessions, so the
+real project kept running in file mode until that stale line was removed.
+If you change a config default and it doesn't seem to take effect, check
+`.env` for a stale override of the same key before assuming the code is
+broken.
+
+### Troubleshooting: "I'm only getting 3 surveys, not ~1800"
+
+This is always a config-resolution question, never an API/network problem
+(if the API were unreachable or credentials were rejected, the run would
+say so explicitly and stop before extracting anything — see
+`etl.ensure_api_credentials`). **3** is the exact record count of
+`data/sample_surveys.json` (file mode); the real number (currently **1804**,
+but this drifts — it's a live count on the Shopmetrics side, not a
+constant) only comes back when `EXTRACTION_MODE` resolves to `api`.
+
+Diagnose by checking where `EXTRACTION_MODE` is actually coming from, in
+precedence order (first one found wins):
+
+1. **A real shell/session environment variable.** Check it directly:
+   PowerShell: `$env:EXTRACTION_MODE`; cmd: `echo %EXTRACTION_MODE%`; also
+   check persistent Windows env vars, which survive across sessions and are
+   easy to forget about: `[Environment]::GetEnvironmentVariable("EXTRACTION_MODE", "User")`
+   and the same with `"Machine"`. If any of these print `file`, that's your
+   answer — remove it (`[Environment]::SetEnvironmentVariable("EXTRACTION_MODE", $null, "User")`
+   for a persistent one, or just don't set it in the current shell).
+2. **An explicit `--mode file` CLI flag** on the command actually run —
+   check the exact command line used, including anything a wrapper script
+   or menu option passed. (`run.bat run --mode file`, `manage.py run
+   --mode file`, and the menu's option 5 all call the pipeline explicitly
+   without `--mode`, i.e. they don't force file mode — only an intentional
+   `--mode file` does.)
+3. **`.env`** — open it and look for an `EXTRACTION_MODE=` line. If present
+   and set to `file`, that's almost certainly it (this is the exact trap
+   documented above — a stale line surviving from earlier testing).
+4. **`config/config.json`** — check the `"EXTRACTION_MODE"` value. Should
+   be `"api"`. If it's been hand-edited to `"file"`, that's a real,
+   deliberate change to the checked-in default, not a bug.
+5. **The hardcoded fallback** in `config.py` (`EXTRACTION_MODE =
+   os.environ.get("EXTRACTION_MODE", "api")`) — only reached if
+   `config/config.json` is missing entirely. Should say `"api"` in the
+   source; if someone changed the string literal here back to `"file"`,
+   that's the bug.
+
+The fastest single check that cuts through all five layers at once —
+run this from the repo root and read off exactly what the program itself
+will use, no guessing:
+```
+.venv\Scripts\python.exe -c "import sys; sys.path.insert(0,'src'); import config; print(config.EXTRACTION_MODE)"
+```
+It should print `api`. If it prints `file`, work down the list above in
+order (1 through 5) until you find the layer that's setting it, starting
+with the environment-variable checks since those are the easiest to forget
+about and the highest precedence.
 
 ## Database backends — portability rules
 
@@ -289,6 +437,102 @@ in Shopmetrics admin (Administration → Tools and Settings → Site Settings �
 Other → API v2 Authorization – Client Credentials) — deleting the local
 copy doesn't revoke the old value.
 
+## Exactly how a scrape happens — the literal request/response mechanics
+
+Everything below is what `api_client.py` actually does, spelled out
+mechanically (endpoint, payload shape, real example values from this
+account) so it can be understood or reconstructed without reading the
+module line by line. Every live-mode run (`EXTRACTION_MODE=api`) makes
+exactly **3 real network round-trips total**, no matter how many surveys
+come back — 1 auth + 2 query calls:
+
+**1. Authenticate — OAuth2 Client Credentials Grant**
+```
+POST https://training212.shopmetrics.com/oauth/connect/token
+Content-Type: application/x-www-form-urlencoded
+Body: client_id=<SHOPMETRICS_CLIENT_ID>&client_secret=<SHOPMETRICS_CLIENT_SECRET>&grant_type=client_credentials
+```
+Response: `{"access_token": "<opaque token, ~900 chars>", "expires_in": 1800, ...}`.
+`api_client._token_cache` holds this in memory (module-level dict) and
+reuses it for the rest of the process's lifetime until 30 seconds before
+`expires_in` elapses. This request happens exactly **once** per run —
+`etl.ensure_api_credentials()` triggers it first, as a verification step
+before extraction even starts (so a bad credential is caught and reported
+immediately, not mid-run); the two query calls below (steps 2 and 3) each
+also call `api_client.get_access_token()`, but that function checks the
+cache first and returns the already-fetched token instantly — neither of
+them makes a second token request.
+
+**2. List unopened survey instances**
+```
+POST https://training212.shopmetrics.com/api/v2/execute
+Content-Type: application/x-www-form-urlencoded      <-- NOT application/json, see quirk below
+Authorization: Bearer <token>
+Body (form field "post", value is this JSON *string*):
+{
+  "action": "exec",
+  "dataset": {"datasetname": "/Apps/SM/APIv2/Query/ClientAnalytics/ClientAnalytics"},
+  "parameters": [
+    {"name": "QuerySpecification", "value": "[InstanceID][Title][Loc ID][Location Name][Date][ScorePctXX.XX][SurveyStatusName][AttachmentsCount][Login][Shopper Name][WorkflowStepID][Campaign][IsSurveyInstanceViewedBySecurityUser][WHERE:IsSurveyInstanceViewedBySecurityUser|0][ORDERBY:Date|DESC]"},
+    {"name": "ClientOrFormIDs", "value": "-995"}
+  ]
+}
+```
+Response shape: `{"dataset": {"data": [[ {row1 fields...}, {row2 fields...}, ... ]]}}`
+— note the double nesting, `data` is a list containing one list of row
+objects (`api_client._execute_dataset` unwraps this to `response["dataset"]["data"][0]`).
+Confirmed live: every returned row has `IsSurveyInstanceViewedBySecurityUser
+== 0` — the `[WHERE:...]` clause is a genuine server-side filter, not just
+decorative. Result is capped client-side to `SHOPMETRICS_MAX_RECORDS_PER_RUN`
+(default `5000`) via a plain Python slice (`rows[:limit]`) — the API itself
+returns everything matching the filter in one shot; there is no
+server-side pagination in this call.
+
+**3. Fetch each returned survey's responses**
+```
+POST https://training212.shopmetrics.com/api/v2/execute   (same endpoint, same transport)
+Body (form field "post"):
+{
+  "action": "exec",
+  "dataset": {"datasetname": "/Apps/SM/APIv2/Query/ClientAnalytics/ClientAnalytics"},
+  "parameters": [
+    {"name": "QuerySpecification", "value": "[InstanceID][QuestionID][ProtoAnswerText][Question Comment]"},
+    {"name": "SurveyInstanceIDs", "value": "10001,10004,10008,..."}   <-- CSV of every InstanceID from step 2
+  ]
+}
+```
+Rows come back ungrouped (one row per question per survey); `api_client.
+get_survey_responses()` groups them into
+`{instance_id: [{"question_id", "answer_text", "comment"}, ...]}` by
+`InstanceID`. **Every survey instance seen has returned every answer
+option for every question**, not only the one the shopper picked (e.g. a
+34-answer-row survey with ~a dozen questions) — this is a confirmed,
+unresolved upstream data-shape gap, not a bug in this codebase (SPECIFICATION §10.4).
+
+**That's the whole live extraction — exactly 2 `/api/v2/execute` calls per
+run** (steps 2 and 3), regardless of whether 3 surveys or 3,000 come back,
+plus the one cached token request (step 1). This is what
+keeps a full-backlog pull (`SHOPMETRICS_MAX_RECORDS_PER_RUN=5000`, larger
+than the account's current backlog) within the KB's fair-use guidance
+against high-volume *consecutive* calls — volume of data isn't the same as
+volume of *requests*, and this design only ever issues 2 requests no
+matter which.
+
+**Mark-opened (separate step, after load, only when `COMMAND_MODE=live`)**
+uses the *same* `/api/v2/execute` transport but a **command** dataset
+(`/Apps/SM/APIv2/Command/SurveyInstances/BulkProcessing_SetReadStatus`,
+parameters `SurveyInstancesIDsCSV` + `ReadStatus=1`) rather than a query —
+this flips `IsSurveyInstanceViewedBySecurityUser` back to `1`, which is
+what would make step 2's `[WHERE:...]` filter exclude it on the next run.
+**Currently returns HTTP 500 on this account** (confirmed, SPECIFICATION
+§10.3) — this is why `COMMAND_MODE` defaults to `mock`
+(`api_client.mark_survey_opened_mock`, no network call, always "succeeds")
+and why re-running the pipeline keeps re-fetching the same surveys (they
+never actually get marked opened on the Shopmetrics side) — `load.py`'s own
+`survey_id` dedup is what prevents them from being re-inserted locally,
+which is a completely separate mechanism from the "opened" flag on the
+Shopmetrics side.
+
 ## API quirks worth knowing before touching `api_client.py`
 
 These were discovered by testing against the real account, not documented
@@ -407,6 +651,22 @@ than reverting to a bare exception:
   to the run (`extract.py`'s `REQUIRED_FIELDS` check) — this predates the
   hardening pass and was confirmed still correct, not something to
   "improve" into a hard failure.
+- **`menu.py`'s main loop used to spin forever on true EOF.** `_ask()`
+  mapped both a blank Enter *and* EOFError to `""`, and `main()` treated
+  `""` as "reprint the menu and loop again" — fine for a blank Enter, but
+  once stdin actually hits EOF (closed, or redirected input that ran out),
+  every subsequent `input()` call raises EOFError again immediately, so the
+  loop reprinted the full menu banner as fast as possible, forever
+  (reproduced directly: the output file hit 59MB in ~7 seconds before being
+  killed). Fixed with a separate `_ask_top()` used only by `main()`'s own
+  loop, which returns `None` specifically on EOF so `main()` can exit
+  instead of looping; every other call site still uses plain `_ask()`,
+  where treating EOF the same as a blank Enter is harmless (each of those
+  prompts is a single read, not a loop). If you touch `menu.py`'s input
+  handling, keep this distinction — don't collapse `_ask`/`_ask_top` back
+  into one function without re-testing true EOF specifically (a blank line
+  *followed by* more input doesn't exercise this path; only genuine stream
+  exhaustion does).
 
 ## Style conventions already established in this repo
 

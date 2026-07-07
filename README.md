@@ -60,19 +60,21 @@ for what to `pip install`).
 ## 1. Run it
 
 ```
-run.bat            (double-click: scrapes the live API — same as "run.bat run --mode api")
-run.bat run        (uses config.json defaults: offline sample data, no network)
-run.bat run --mode file   (explicitly offline)
+run.bat                    (double-click, or "run.bat run": scrapes the live API by default)
+run.bat run --mode file    (explicitly offline instead: sample data, no network/credentials)
 ```
 
-Double-clicking `run.bat` pulls real surveys from the Shopmetrics Query API
-(read-only) and simulates the "mark opened" step. Credentials are verified
+By default — both the bare double-click and the explicit `run.bat run` —
+this pulls real surveys from the Shopmetrics Query API (read-only) and
+simulates the "mark opened" step. This is deliberate: a new install should
+scrape real data out of the box, not sample data. Credentials are verified
 against the API before every run: if they're missing from `.env` — or
 saved but rejected by Shopmetrics — you're prompted to (re-)enter them and
-`.env` is updated. The explicit `run.bat run` command still follows
-`config/config.json` defaults (`file`/`mock` — offline sample data). Either
-way it's safe to run repeatedly; records already loaded are skipped as
-duplicates.
+`.env` is updated (§4.1). Prefer to try it offline first? `--mode file`
+switches to the bundled sample data with no network calls and no
+credentials needed — see §4.3 for the full list of things `EXTRACTION_MODE`/
+`COMMAND_MODE` control. Either way it's safe to run repeatedly; records
+already loaded are skipped as duplicates.
 
 Every run automatically generates a fresh HTML dashboard (§2.1), **opens it
 in your default browser**, and prints a callout in the terminal pointing at
@@ -359,8 +361,9 @@ writes its own storage.
 
 ## 4. Using the real Shopmetrics API
 
-The pipeline can also pull real data and make real "mark opened" calls
-against an actual Shopmetrics site, instead of the offline sample data.
+This is what the pipeline does **by default** — pull real survey data from
+an actual Shopmetrics site (offline sample data is the opt-in alternative,
+`--mode file`, for trying things out with no credentials or network).
 
 ### 4.1 Set up your credentials — **do this once**
 
@@ -417,15 +420,19 @@ so there's nothing risky about exploring with it.
 
 ### 4.3 Run the full ETL pipeline in live mode
 
-Leave `config/config.json`'s `EXTRACTION_MODE`/`COMMAND_MODE` at their safe
-defaults (`file`/`mock`) for everyday use, and override them per-run with
-flags instead, so you don't forget a "live" setting turned on:
+`EXTRACTION_MODE=api` is already the checked-in default in
+`config/config.json` — a plain `run.bat` or `run.bat run` already does this,
+no flags needed. `COMMAND_MODE` stays at its safe default, `mock`, since the
+real "mark opened" call is currently broken upstream (next paragraph) —
+override either per-run with flags instead of editing `config/config.json`,
+so you don't leave a "live" setting turned on by accident:
 
 ```
 run.bat run --mode api --command-mode mock
 ```
 
-- `--mode api` calls the real Shopmetrics Query API (read-only — safe to try).
+- `--mode api` calls the real Shopmetrics Query API (read-only — safe to try;
+  this is also just the default, spelled out).
 - `--command-mode live` calls the real Command API to mark the survey's
   viewed/read status (`BulkProcessing_SetReadStatus`). **Currently fails with
   HTTP 500 on this account** — the dataset this calls appears to be
@@ -451,14 +458,14 @@ you want the full dataset in both places.
 
 | Setting | `run.bat run` flag | Config source | Values / effect |
 |---|---|---|---|
-| Extraction source | `--mode` | `EXTRACTION_MODE` (config.json) | `file` (default, no network) or `api` (real Query API, read-only) |
+| Extraction source | `--mode` | `EXTRACTION_MODE` (config.json) | `api` (**default** — real Query API, read-only, needs credentials) or `file` (offline sample data, no network/credentials) |
 | Mark-opened mode | `--command-mode` | `COMMAND_MODE` (config.json) | `mock` (default, no network) or `live` (real Command API, **writes real data** — currently returns HTTP 500 on this account, §10.3) |
 | Database backend | `--db` | `DB_BACKEND` (config.json) | `sqlite` (default, `data/etl.db`, no extra install) or `sqlserver` (local SQL Server, viewable in SSMS) |
 | Records per run | `--max-records` | `SHOPMETRICS_MAX_RECORDS_PER_RUN` (config.json) | `5000` (default — collects the full backlog every `api` run). Lower it for a small test batch. |
 | Auto-open dashboard | `--no-open` | `OPEN_DASHBOARD` (config.json/.env) | `true` (default): open the newly numbered `reports/dashboard<N>.html` in the browser after `run`/`dashboard`. |
 | SQL Server instance | — | `SQLSERVER_SERVER` (config.json) | `.\SQLEXPRESS` (default) |
 | SQL Server database | — | `SQLSERVER_DATABASE` (config.json) | `ShopmetricsETL` (default); created automatically if missing |
-| API credentials | — | `SHOPMETRICS_CLIENT_ID`/`_SECRET` (`.env` only) | *(unset)*; required for `api`/`live` |
+| API credentials | — | `SHOPMETRICS_CLIENT_ID`/`_SECRET` (`.env` only) | *(unset until you're prompted for them)*; required since `api` is the default mode |
 
 `--db`/`--mode`/`--command-mode`/`--max-records` also work on `run.bat view`,
 `dashboard`, and `setup-db` where applicable (each accepts `--db`; `run` accepts all four).

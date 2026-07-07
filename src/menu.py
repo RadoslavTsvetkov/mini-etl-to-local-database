@@ -32,9 +32,31 @@ def _run(argv: list[str]) -> None:
 
 
 def _ask(prompt: str) -> str:
+    """Blank Enter and Ctrl+C both resolve to "" -- every caller besides
+    main()'s own loop treats that as "skip this field"/"cancel", which is
+    fine to repeat. See _ask_top for why the top-level loop needs EOF
+    handled differently."""
     try:
         return input(prompt).strip()
     except (EOFError, KeyboardInterrupt):
+        print()
+        return ""
+
+
+def _ask_top(prompt: str) -> str | None:
+    """Like _ask, but returns None specifically on EOF (stdin closed or
+    exhausted -- e.g. redirected from an empty/finished source), rather
+    than "". Once stdin hits EOF it stays there, so every future input()
+    call raises EOFError again immediately -- treating that the same as a
+    blank Enter (which main()'s loop reprints the menu for for legitimate
+    interactive use) would spin forever re-printing the menu. Ctrl+C still
+    maps to "" here, matching _ask, since that's a one-off interruption,
+    not a permanently closed stream."""
+    try:
+        return input(prompt).strip()
+    except EOFError:
+        return None
+    except KeyboardInterrupt:
         print()
         return ""
 
@@ -159,7 +181,13 @@ def _print_menu() -> None:
 def main() -> int:
     _print_menu()
     while True:
-        choice = _ask(f"\n{CYAN}> {RESET}").lower()
+        raw_choice = _ask_top(f"\n{CYAN}> {RESET}")
+        if raw_choice is None:
+            # stdin hit EOF (closed/exhausted, e.g. redirected input ran
+            # out) -- exit instead of re-reading forever.
+            print("\nBye!")
+            return 0
+        choice = raw_choice.lower()
         if choice in ("0", "exit", "quit", "q"):
             print("Bye!")
             return 0

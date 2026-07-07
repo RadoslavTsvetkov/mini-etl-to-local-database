@@ -4,7 +4,7 @@
   "SURVEYS_SOURCE_PATH": "data/sample_surveys.json",
   "LOG_PATH": "logs/etl.log",
 
-  "EXTRACTION_MODE": "file",
+  "EXTRACTION_MODE": "api",
   "COMMAND_MODE": "mock",
   "OPEN_DASHBOARD": "true",
 
