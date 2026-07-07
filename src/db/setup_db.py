@@ -48,11 +48,24 @@ def _migrate_sqlserver_columns(conn) -> None:
 
 def _get_sqlite_connection() -> sqlite3.Connection:
     os.makedirs(os.path.dirname(config.DB_PATH), exist_ok=True)
-    conn = sqlite3.connect(config.DB_PATH)
-    conn.row_factory = sqlite3.Row
-    with open(config.SCHEMA_PATH, "r", encoding="utf-8") as f:
-        conn.executescript(f.read())
-    conn.commit()
+    try:
+        conn = sqlite3.connect(config.DB_PATH)
+        conn.row_factory = sqlite3.Row
+        with open(config.SCHEMA_PATH, "r", encoding="utf-8") as f:
+            conn.executescript(f.read())
+        conn.commit()
+    except sqlite3.DatabaseError as e:
+        sys.exit(
+            f"{config.DB_PATH} doesn't look like a valid SQLite database ({e}).\n"
+            f"It may be corrupted (e.g. an interrupted write) or not a database file at\n"
+            f"all. If you don't need what's in it, delete/rename it and re-run -- a fresh\n"
+            f"one is created automatically. Otherwise restore it from a backup."
+        )
+    except FileNotFoundError as e:
+        sys.exit(
+            f"Missing schema file: {e.filename}\n"
+            f"Your checkout may be incomplete -- try re-cloning the repository."
+        )
     _migrate_sqlite_columns(conn)
     return conn
 
@@ -73,18 +86,34 @@ def _sqlserver_connection_string(database: str) -> str:
 
 
 def _get_sqlserver_connection():
-    import pyodbc
+    try:
+        import pyodbc
+    except ImportError:
+        sys.exit(
+            "DB_BACKEND=sqlserver needs the 'pyodbc' package, which isn't installed.\n"
+            "Run install.bat again (it installs it by default), or manually:\n"
+            "  .venv\\Scripts\\python.exe -m pip install -r requirements-sqlserver.txt"
+        )
 
-    # 1. Ensure the target database exists (connect to master to check/create it).
-    master_conn = pyodbc.connect(_sqlserver_connection_string("master"), autocommit=True)
-    master_conn.execute(
-        f"IF DB_ID(N'{config.SQLSERVER_DATABASE}') IS NULL "
-        f"CREATE DATABASE [{config.SQLSERVER_DATABASE}];"
-    )
-    master_conn.close()
+    try:
+        # 1. Ensure the target database exists (connect to master to check/create it).
+        master_conn = pyodbc.connect(_sqlserver_connection_string("master"), autocommit=True)
+        master_conn.execute(
+            f"IF DB_ID(N'{config.SQLSERVER_DATABASE}') IS NULL "
+            f"CREATE DATABASE [{config.SQLSERVER_DATABASE}];"
+        )
+        master_conn.close()
 
-    # 2. Connect to the target database and ensure tables exist.
-    conn = pyodbc.connect(_sqlserver_connection_string(config.SQLSERVER_DATABASE))
+        # 2. Connect to the target database and ensure tables exist.
+        conn = pyodbc.connect(_sqlserver_connection_string(config.SQLSERVER_DATABASE))
+    except pyodbc.Error as e:
+        sys.exit(
+            f"Could not connect to SQL Server ({config.SQLSERVER_SERVER}): {e}\n"
+            f"Check that SSMS/SQL Server Express is installed and SQLSERVER_SERVER\n"
+            f"(config/config.json) matches your actual instance name -- see README.md\n"
+            f"section 3 for troubleshooting."
+        )
+
     with open(config.SCHEMA_SQLSERVER_PATH, "r", encoding="utf-8") as f:
         conn.execute(f.read())
     conn.commit()

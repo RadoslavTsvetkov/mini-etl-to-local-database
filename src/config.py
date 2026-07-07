@@ -13,6 +13,7 @@ Layered, highest precedence first:
 
 import json
 import os
+import sys
 
 # src/config.py -> parent is the project root (config/, data/, logs/, etc.)
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -42,11 +43,24 @@ def _load_dotenv(path: str) -> None:
 def _load_json_config(path: str) -> None:
     """Loads config/config.json as env-var defaults (lowest precedence of
     the three layers -- only fills keys not already set by .env or a real
-    environment variable)."""
+    environment variable). A missing file is fine (falls back to the
+    hardcoded defaults below); a present-but-broken file is not something
+    to silently ignore or crash on with a raw traceback -- every command
+    imports this module, so this is the one place a bad edit to
+    config.json would otherwise take down the entire program."""
     if not os.path.exists(path):
         return
-    with open(path, "r", encoding="utf-8") as f:
-        data = json.load(f)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except json.JSONDecodeError as e:
+        sys.exit(
+            f"config/config.json is not valid JSON ({e.msg} at line {e.lineno}, column {e.colno}).\n"
+            f"Fix the syntax error, or restore the file from git (`git checkout -- config/config.json`)."
+        )
+    if not isinstance(data, dict):
+        sys.exit("config/config.json must be a JSON object ({\"KEY\": \"value\", ...}), "
+                 f"got {type(data).__name__}.")
     for key, value in data.items():
         os.environ.setdefault(key, str(value))
 

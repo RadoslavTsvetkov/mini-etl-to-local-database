@@ -18,9 +18,13 @@ if errorlevel 1 (
 
 python -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)" >nul 2>&1
 if errorlevel 1 (
-    echo WARNING: Your Python version looks older than 3.10. This project may
-    echo not work correctly. Continuing anyway...
+    echo ERROR: Python 3.10 or newer is required ^(this project's code uses
+    echo newer type-hint syntax that fails immediately on anything older^).
+    echo Install a current version from https://www.python.org/downloads/
+    echo ^(check "Add python.exe to PATH"^) and re-run this script.
     echo.
+    pause
+    exit /b 1
 )
 
 echo Creating virtual environment in .venv ...

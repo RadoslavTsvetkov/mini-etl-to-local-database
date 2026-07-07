@@ -23,6 +23,7 @@ Zero third-party dependencies: stdlib http.server only.
 import json
 import os
 import secrets
+import sys
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -32,6 +33,8 @@ import load
 from colors import BOLD, CYAN, RED, RESET, YELLOW
 from db.setup_db import get_connection
 from logger import get_logger
+
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 logger = get_logger()
 
@@ -142,6 +145,17 @@ def _handle_delete_filtered(body: dict) -> dict:
     )
     new_path = generate_dashboard.generate(server_token=TOKEN)
     return {"ok": True, "redirect": "/" + os.path.basename(new_path)}
+
+
+class _DashboardServer(ThreadingHTTPServer):
+    # ThreadingHTTPServer's default allow_reuse_address=True sets SO_REUSEADDR,
+    # which on Windows (unlike POSIX) lets a *second* process silently bind
+    # the same port and both start "listening" -- incoming requests then get
+    # routed to whichever process the OS picks, with no error to either side.
+    # Disabling it restores the behavior everyone expects: a second `serve`
+    # on an occupied port fails fast with a normal "address already in use"
+    # OSError, which run() below already catches and reports cleanly.
+    allow_reuse_address = False
 
 
 class DashboardHandler(BaseHTTPRequestHandler):
@@ -258,7 +272,7 @@ def run(port: int = 8765, no_open: bool = False) -> int:
         return 1
 
     try:
-        httpd = ThreadingHTTPServer(("127.0.0.1", port), DashboardHandler)
+        httpd = _DashboardServer(("127.0.0.1", port), DashboardHandler)
     except OSError as e:
         print(f"{RED}Could not start the server on 127.0.0.1:{port}: {e}{RESET}")
         print(f"{RED}Something else may be using that port — try `manage.py serve --port <other>`.{RESET}")

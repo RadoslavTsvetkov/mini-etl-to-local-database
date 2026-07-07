@@ -22,24 +22,29 @@ PATH"** during install) and double-click `install.bat` again.
 
 **Then, any time you want to use the pipeline: double-click `run.bat`.**
 That's it — no manual `pip install`, no activating a venv by hand, no
-terminal required. Double-clicking `run.bat` with no arguments scrapes the
-newest unopened surveys from the live Shopmetrics Query API (read-only; the
-mark-opened step stays mocked), refreshes the dashboard, opens it in your
-browser, then waits for a key press so you can read the output. The first
-time, if `.env` has no API credentials yet, it asks for your Client ID and
-Client Secret right in the console, saves them to `.env`, and verifies them
-before continuing (§4.1 explains where these come from). The same happens
-if the saved credentials are **wrong** — every API run verifies them
-upfront, and if Shopmetrics rejects them (mistyped, deactivated, or
-regenerated), you're asked to re-enter them and `.env` is rewritten.
+terminal required, and **no commands to memorize**. Double-clicking
+`run.bat` with no arguments scrapes the newest unopened surveys from the
+live Shopmetrics Query API (read-only; the mark-opened step stays mocked),
+refreshes the dashboard, opens it in your browser, and then drops you into
+a **numbered menu right there in the console** — "view my data", "look
+around Shopmetrics", "delete a survey", "run it again", etc. — so you never
+need to know a single `manage.py` flag to do the everyday things (§1.1
+covers it). The first time, if `.env` has no API credentials yet, it asks
+for your Client ID and Client Secret right in the console, saves them to
+`.env`, and verifies them before continuing (§4.1 explains where these come
+from). The same happens if the saved credentials are **wrong** — every API
+run verifies them upfront, and if Shopmetrics rejects them (mistyped,
+deactivated, or regenerated), you're asked to re-enter them and `.env` is
+rewritten.
 
-To use the other commands (`view`, `browse`, `dashboard`, `serve`,
-`delete-survey`, `clear-surveys`, `setup-db`, or any flag), open a terminal
-in this folder instead and run `run.bat <command> ...` — it forwards
-whatever you type to the actual program (see the sections below for the
-full list). Only the plain double-click (no arguments) needs the "press any
-key" pause; running `run.bat` from an
-already-open terminal behaves like any normal command.
+To skip straight to one specific command (`view`, `browse`, `dashboard`,
+`serve`, `delete-survey`, `delete-surveys`, `clear-surveys`, `setup-db`, or
+any flag) instead of going through the menu, open a terminal in this folder
+and run `run.bat <command> ...` — it forwards whatever you type to the
+actual program (see the sections below for the full list). Only the plain
+double-click (no arguments) shows the menu; running `run.bat <command>`
+from an already-open terminal behaves like any normal command and exits
+when it's done.
 
 If you're not on Windows, or prefer running Python directly: every example
 below also works as `python src/manage.py <command> ...` from an activated
@@ -89,6 +94,50 @@ run.bat run --mode api --command-mode mock --db sqlserver --max-records 500
 Every flag is optional and falls back to `config/config.json`/`.env`
 defaults when omitted — see `--help` for the full list, or the quick
 reference in §4.4.
+
+## 1.1 The menu — "okay, now what?"
+
+After a plain double-clicked `run.bat` finishes scraping and opens the
+dashboard, it doesn't just close — it shows a short numbered list right in
+the same console window:
+
+```
+============================================================
+ What would you like to do next?
+============================================================
+Full command-line details for everything below are in README.md.
+
+  EXPLORE YOUR DATA
+    1)  View the collected surveys & run history (in this terminal)
+    2)  Look around live Shopmetrics data (read-only lookup)
+    3)  Refresh the dashboard (regenerate the HTML report)
+    4)  Open the dashboard with LIVE Delete buttons (serve mode)
+  GET MORE DATA
+    5)  Run the pipeline again (scrape newest surveys from Shopmetrics)
+  REMOVE DATA — see README.md §2.2 first
+    6)  Delete ONE survey, by its ID
+    7)  Delete surveys matching a filter (title / location / date / ID range / ...)
+    8)  Delete ALL surveys — drastic, asks for extra confirmation
+
+    0)  Exit
+```
+
+This exists so you never have to know a `manage.py` subcommand name (let
+alone its flags) to do any of the everyday things — pick a number, answer
+one or two plain-English questions if it asks any (a survey ID, a filter
+value, that sort of thing), and it runs the matching command for you
+underneath. Typing `menu` (or `help`/`?`) reprints the list if it's
+scrolled off; `0` (or `exit`) closes it. Every option that asks for
+confirmation (deleting something) asks exactly the same way it would if
+you'd typed the command yourself — nothing about safety is skipped or
+shortened just because it came from the menu.
+
+Picking option **4** (`serve`) or **5** (`run` again) hands control to that
+command directly (a live server you stop with `Ctrl+C`, or a fresh pipeline
+run) — once it finishes, you're back at the menu. This menu is purely a
+front door to the commands documented in the rest of this file — if you'd
+rather skip it and type commands directly, `run.bat <command>` (§0) always
+works too, from a terminal, with no menu involved.
 
 ## 2. View the collected data
 
@@ -416,9 +465,28 @@ you want the full dataset in both places.
 
 ## Troubleshooting
 
-- **`install.bat` says Python wasn't found**: install Python 3.10+ from
-  [python.org](https://www.python.org/downloads/) and make sure "Add Python
-  to PATH" was checked during install, then re-run `install.bat`.
+- **`install.bat` says Python wasn't found, or that it's too old**: install
+  Python 3.10+ from [python.org](https://www.python.org/downloads/) and make
+  sure "Add Python to PATH" was checked during install, then re-run
+  `install.bat`. 3.10+ is a hard requirement, not a suggestion — the code
+  uses newer type-hint syntax that fails outright on anything older.
+- **A command exits with a plain one-line error instead of doing anything**
+  (config file, database, or SQL Server connection problems): these are
+  deliberately short-circuited with a clear message rather than a Python
+  traceback — read the message, it names the exact file/setting at fault.
+  Common ones: `config/config.json is not valid JSON` (fix the syntax, or
+  `git checkout -- config/config.json` to restore the checked-in version);
+  `<path> doesn't look like a valid SQLite database` (the `.db` file is
+  corrupted or isn't actually a SQLite file — delete/rename it and re-run,
+  a fresh one is created automatically); `needs the 'pyodbc' package` (run
+  `install.bat` again, or `pip install -r requirements-sqlserver.txt`).
+- **The menu asks for something and then says "Refusing ... in a
+  non-interactive context"**: this shows up if `run.bat`'s console isn't a
+  real interactive terminal (e.g. its output is being redirected/piped by
+  something else) — the confirmation genuinely needs to be typed at a real
+  keyboard prompt, the same restriction `delete-survey`/`clear-surveys` have
+  always had from the command line. Just double-clicking `run.bat` normally
+  gives you a real console, so this shouldn't come up in everyday use.
 - **`run.bat` says the virtual environment wasn't found**: run `install.bat`
   first (once per machine/clone).
 - **HTTP 403 / Cloudflare error 1010**: already handled — `api_client.py`
@@ -442,17 +510,35 @@ you want the full dataset in both places.
 - **Command API validation errors** (e.g. survey status): these are real
   responses from Shopmetrics' business rules, not bugs — read the message,
   it names the exact constraint that failed.
-- **`clear-surveys` refuses with a count mismatch**: either you typed the
-  wrong number at the prompt, or (in a script) `--expect-count` doesn't
-  match the database's *current* row count — re-run `run.bat view surveys`
-  or just re-run `clear-surveys` to see the current total, then use that
-  exact number. This check exists specifically to stop a stale command from
-  deleting more or less than you think.
-- **Dashboard's Delete / Clear-all buttons are grayed out with a note about
-  `manage.py serve`**: expected — a dashboard opened as a plain file has no
-  server behind it to write to the database. Run `run.bat serve` instead
-  (§2.2) and use the copy of the dashboard it opens for you.
+- **`clear-surveys` / `delete-surveys` refuses with a count mismatch**:
+  either you typed the wrong number at the prompt, or (in a script)
+  `--expect-count` doesn't match the database's *current* matching row
+  count — re-run `run.bat view surveys` (or just re-run the same command)
+  to see the current total, then use that exact number. This check exists
+  specifically to stop a stale command from deleting more or less than you
+  think.
+- **`delete-surveys` says "No filters given — refuses to run with none"**:
+  by design — an empty filter would match every survey, and that's what
+  `clear-surveys` is for, deliberately spelled differently so you can't
+  reach for the wrong command by habit. Add at least one `--title`/
+  `--location`/`--id-min`/etc. flag, or use `clear-surveys` if you really do
+  want everything gone.
+- **Dashboard's Delete / Delete by filter / Clear-all buttons are grayed
+  out with a note about `manage.py serve`**: expected — a dashboard opened
+  as a plain file has no server behind it to write to the database. Run
+  `run.bat serve` instead (§2.2) and use the copy of the dashboard it opens
+  for you.
 - **"Missing or invalid dashboard token" from `run.bat serve`**: the page
-  you're clicking Delete/Clear-all on is stale (from a previous `serve`
-  session, or you reloaded a URL after restarting `serve`, which mints a new
-  token each time). Reload the page at `http://127.0.0.1:8765/` and retry.
+  you're clicking Delete/Delete by filter/Clear-all on is stale (from a
+  previous `serve` session, or you reloaded a URL after restarting `serve`,
+  which mints a new token each time). Reload the page at
+  `http://127.0.0.1:8765/` and retry.
+- **`run.bat serve` fails with "Only one usage of each socket address..."**:
+  something (often a `serve` you forgot was already running) is already
+  using that port. Pick a different one: `run.bat serve --port 8766`.
+- **"Delete by filter" preview says 0 matches but you expected some**: text
+  filters (title/location/status/campaign/fieldworker) are substring
+  matches on the exact stored value, not fuzzy search — check spelling and
+  try a shorter fragment (e.g. `"geneva"` instead of `"Geneva Office"`).
+  Date filters use the survey's `submitted_at` date, not when it was loaded
+  into your database.

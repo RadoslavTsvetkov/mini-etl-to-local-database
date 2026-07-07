@@ -31,6 +31,14 @@ from colors import BOLD, GREEN, RED, RESET, YELLOW
 from db.setup_db import get_connection
 from logger import get_logger
 
+# Every subcommand (run, view, browse, dashboard, delete-*, clear-surveys,
+# serve, setup-db) flows through this one entry point, so fixing stdout's
+# encoding here covers all of them -- matters when stdout is redirected/
+# piped rather than a live console (a real console gets correct Unicode
+# handling from Python automatically on Windows; a pipe falls back to a
+# locale encoding that mangles em-dashes etc. without this).
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 
 def _db_parent() -> argparse.ArgumentParser:
     """--db flag shared by subcommands that read/write the database but
@@ -365,7 +373,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_serve = sub.add_parser(
         "serve", parents=[_db_parent()],
-        help="Serve the dashboard locally (127.0.0.1) with working Delete / Clear-all buttons.",
+        help="Serve the dashboard locally (127.0.0.1) with working Delete / Delete-by-filter / Clear-all buttons.",
     )
     p_serve.add_argument("--port", type=int, default=8765, help="Local port to listen on (default: 8765)")
     p_serve.add_argument("--no-open", action="store_true", help="Don't open the dashboard in the browser on start")

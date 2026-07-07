@@ -47,7 +47,7 @@ Everything below is taken from `_KNOWLEDGEBASE/023-APIs/`, not invented. Article
 | Configuration format | Split in two: **`config/config.json`** (checked into git) holds all non-secret settings and defaults; **`.env`** (gitignored) holds secrets (API credentials) and any ad-hoc local overrides. See §7. |
 | Distribution / setup | Two `.bat` files at the repo root: `install.bat` (one-time: creates a `.venv`, installs dependencies, seeds `.env` from the template) and `run.bat` (forwards to `manage.py`; bare `run.bat` with no args scrapes the live API, prompting once for credentials if `.env` is empty, then generates the next numbered dashboard and opens it in the browser). Goal: clone the repo on any Windows machine with Python 3.10+, run `install.bat` once, then `run.bat` — no manual Python/pip steps, no manual `.env` editing (the credentials prompt fills it). See §4.2. |
 | Source layout | All Python modules live under `src/` (with `src/db/` as the database-access sub-package), separate from `config/` (JSON config), `data/` (sample input + generated SQLite file), `logs/`, and `reports/` (generated dashboard). See §4.1. |
-| Deleting data | Two CLI commands (`delete-survey`, `clear-surveys`) mutate the active backend directly; `clear-surveys` requires deliberately heavier confirmation than everything else in this project, matching how destructive and rare it is. Both back up to JSON first. Since a static dashboard file has no server to write to, the dashboard's own Delete/Clear-all buttons only work under a new opt-in local server (`manage.py serve`, 127.0.0.1-only, token-gated). See §12. |
+| Deleting data | Three CLI commands (`delete-survey`, `delete-surveys` for filtered/bulk delete, `clear-surveys`) mutate the active backend directly; the two bulk commands require deliberately heavier confirmation than everything else in this project, matching how destructive and rare they are, and `delete-surveys` refuses to run with zero filters (that's what `clear-surveys` is for). All three back up to JSON first. Since a static dashboard file has no server to write to, the dashboard's own Delete/Delete-by-filter/Clear-all buttons only work under a new opt-in local server (`manage.py serve`, 127.0.0.1-only, token-gated). See §12. |
 
 ## 4. Project Structure
 
@@ -71,13 +71,14 @@ specification/                        (repo root)
 │   └── config.json                   # All non-secret configuration (checked into git) -- see §7.1
 │
 ├── src/                               # All Python source code
-│   ├── manage.py                      # Single CLI entry point: run / view / browse / dashboard / delete-survey / clear-surveys / serve / setup-db
+│   ├── manage.py                      # Single CLI entry point: run / view / browse / dashboard / delete-survey / delete-surveys / clear-surveys / serve / setup-db
+│   ├── menu.py                         # Interactive numbered menu shown after run.bat's default flow -- see §4.3
 │   ├── etl.py                          # ETL pipeline orchestration (also runnable directly, with CLI flags)
 │   ├── extract.py                      # Extraction step (file or live Query API)
 │   ├── load.py                         # Load/delete/clear step (dedup + insert + delete), portable across DB backends
 │   ├── api_client.py                   # Auth + Query API + Command API client
-│   ├── backup.py                        # JSON backups written before delete-survey / clear-surveys -- see §12
-│   ├── server.py                        # Local-only (127.0.0.1) web server behind `manage.py serve` -- see §12.3
+│   ├── backup.py                        # JSON backups written before delete-survey / delete-surveys / clear-surveys -- see §12
+│   ├── server.py                        # Local-only (127.0.0.1) web server behind `manage.py serve` -- see §12.4
 │   ├── browse_surveys.py                # Read-only CLI to explore live Shopmetrics data directly
 │   ├── view_data.py                      # Readable, color-highlighted CLI view of collected data
 │   ├── generate_dashboard.py              # Generates the self-contained HTML dashboard
@@ -88,12 +89,14 @@ specification/                        (repo root)
 │       ├── __init__.py
 │       ├── schema.sql                       # DDL for the SQLite backend
 │       ├── schema_sqlserver.sql              # DDL for the SQL Server / SSMS backend
-│       └── setup_db.py                       # Creates/opens + migrates the DB for whichever backend is selected
+│       └── setup_db.py                       # Creates/opens + migrates the DB for whichever backend is selected;
+│                                              #   converts sqlite3.DatabaseError / missing pyodbc / SQL Server
+│                                              #   connection failures into a one-line actionable message, not a traceback
 │
 ├── data/
 │   ├── sample_surveys.json            # Sample/mock survey records (file mode input)
 │   ├── etl.db                          # Generated SQLite database (DB_BACKEND=sqlite; created at runtime)
-│   └── backups/                        # JSON backups written before any delete-survey/clear-surveys (gitignored) -- see §12
+│   └── backups/                        # JSON backups written before any delete-survey/delete-surveys/clear-surveys (gitignored) -- see §12
 │
 ├── logs/
 │   └── etl.log                         # Append-only run log (created at runtime)
@@ -114,7 +117,12 @@ primary intended interaction, not just command-line invocation (though both
 work identically either way):
 
 - **`install.bat`** (run once per machine): verifies Python is on `PATH`
-  (and, non-fatally, that it's 3.10+), creates a virtual environment at
+  **and is 3.10+** — both are hard stops (`pause` + `exit /b 1`), not
+  warnings, since the codebase uses `X | Y` union type hints and `list[T]`
+  generics throughout (`load.py`, `api_client.py`, `menu.py`, etc.) that are
+  a `SyntaxError` on anything older, not a graceful degradation — better to
+  fail clearly here than several confusing steps later. Then creates a
+  virtual environment at
   `.venv/`, installs `requirements.txt` (empty by default) and
   `requirements-sqlserver.txt` (`pyodbc`, installed by default so the SQL
   Server backend works immediately without a second setup step), and copies
@@ -139,12 +147,20 @@ work identically either way):
      generated the next-numbered one), prints its path, and opens it via
      `start` — the batch script owns the open step on this path, which is
      why the Python side is passed `--no-open` (no double-open).
-  3. Ends with a `pause` for the same reason as `install.bat`.
+  3. Runs `src/menu.py` (§4.3) — the numbered "what would you like to do
+     next?" prompt — right there in the same console, so a first-time user
+     lands somewhere actionable instead of a blank "press any key" pause.
+  4. Ends with a `pause` for the same reason as `install.bat`, once the menu
+     is exited.
+  If the pipeline run itself fails (step 1 exits non-zero), steps 2-3 are
+  skipped entirely (`goto :finish`) and it goes straight to the closing
+  `pause` — no point offering a menu of follow-up actions on top of a
+  fatal error.
   Any invocation *with* arguments (`run.bat view`, `run.bat run --mode
   file`, `run.bat dashboard --db sqlserver`, etc.) is forwarded verbatim to
-  `manage.py` and does **not** pause — that path is for an already-open
-  terminal, which stays open on its own (and there the *Python* side
-  auto-opens newly generated dashboards, unless `--no-open` /
+  `manage.py` and does **not** pause or show the menu — that path is for an
+  already-open terminal, which stays open on its own (and there the
+  *Python* side auto-opens newly generated dashboards, unless `--no-open` /
   `OPEN_DASHBOARD=false`).
 - Every path both scripts touch is anchored to `%~dp0` (the `.bat` file's
   own directory), not the current working directory — so they behave
@@ -160,6 +176,73 @@ work identically either way):
   are all created automatically on first use (`os.makedirs` in
   `logger.py`/`setup_db.py`/`generate_dashboard.py`), and dashboard
   numbering simply starts at `dashboard1.html` when `reports/` is empty.
+
+### 4.3 The interactive menu (`src/menu.py`)
+
+Exists to answer "okay, now what?" for someone who hasn't read this file or
+memorized `manage.py`'s subcommands — every menu option is one of those
+subcommands, picked from a numbered list with a plain-English description
+of when you'd reach for it, instead of typed out by hand. `run.bat`'s
+default (no-argument) flow shows it right after opening the dashboard
+(§4.2); it's also runnable directly (`manage.py menu` is *not* wired up —
+it's specifically `python src/menu.py`, or just double-click `run.bat`).
+
+- **Every action shells out to `manage.py <args>`** (`subprocess.run`,
+  no `stdin`/`stdout` redirection) rather than re-implementing any command's
+  logic — so behavior (confirmation prompts, output, exit codes) is
+  byte-for-byte identical to typing the same command directly. Inheriting
+  the console's real stdio means an interactive confirmation prompt inside
+  the subprocess (`delete-survey`'s `yes`, `clear-surveys`'s typed count +
+  `DELETE ALL`) works exactly as it would standalone — including its
+  existing refusal in a non-interactive context, unchanged.
+- The 8 options are grouped under three plain-English headers ("EXPLORE
+  YOUR DATA", "GET MORE DATA", "REMOVE DATA — see README.md §2.2 first")
+  rather than presented as a flat list, so the *shape* of the risk (viewing
+  vs. fetching vs. deleting) is visible before a number is even read.
+  Options that need more input ask for it conversationally (a survey ID; a
+  handful of filter fields, blank to skip each) rather than expecting flag
+  syntax — option 7 (filtered delete) only asks for the most common fields
+  (title, location, status, ID range, date range) and points to
+  `--help`/README §2.2 for the rest (score range, campaign, fieldworker,
+  opened yes/no, exact ID lists) rather than reproducing every
+  `delete-surveys` flag as a prompt.
+- `menu`/`help`/`?` reprint the option list (useful once it's scrolled off).
+  A blank Enter is treated the same as `menu` (reprints rather than exits)
+  so an accidental keypress can't close the menu — only an explicit
+  `0`/`exit`/`quit`/`q` does. An unrecognized entry prints a one-line
+  correction and re-prompts, never exits or crashes.
+- `sys.stdout.reconfigure(encoding="utf-8", errors="replace")` at import
+  time (matching the existing pattern in `view_data.py`/`browse_surveys.py`)
+  — without it, Python falls back to a non-UTF-8 default encoding for
+  `sys.stdout` whenever stdout isn't attached to a real console (piped/
+  redirected, as happens under automated testing and any real scripted use)
+  , corrupting the em-dashes and section markers used throughout the menu's
+  own output. `manage.py` — the umbrella entry point every subcommand flows
+  through — carries the same line at its own top level, so `run`,
+  `dashboard`, `delete-survey`, `delete-surveys`, `clear-surveys`, and
+  `setup-db` (none of which otherwise import a module that sets this) are
+  covered too, not just the four commands that happened to route through
+  an already-protected module. `server.py` got the same fix for the same
+  reason once its own em-dash output was seen mangled under redirection
+  during testing.
+- Options 4 (`serve`) and 5 (`run` again) hand off to a genuinely
+  long-running/blocking command; once `serve` is stopped (`Ctrl+C`, handled
+  inside `server.run()` already) or the pipeline run completes, control
+  returns to the menu loop rather than exiting.
+- Verified end-to-end via `cmd /c "... < inputfile"` redirection (PowerShell
+  5.1's own `|` pipe to a native process re-encodes text in a way that
+  corrupted both directions of this test, an artifact of the test harness
+  rather than the menu; file redirection through `cmd.exe` avoided it): view
+  (option 1) correctly showed the real surveys table; the filtered-delete
+  form (option 7) built the exact right `--id-min`/`--id-max` filter and
+  showed an accurate preview; the browse submenu (option 2) reached the
+  real live Query API and listed clients; dashboard refresh (option 3)
+  regenerated correctly; and every option correctly returned to the menu
+  loop afterward without crashing. No deletion could be confirmed
+  end-to-end in this environment specifically because there's no real
+  interactive TTY available to it (the exact same limitation `delete-survey`/
+  `clear-surveys` already had before the menu existed) — not something the
+  menu changes.
 
 ## 5. Data Model
 
@@ -285,6 +368,16 @@ precedence first**:
    checked-in, non-secret configuration and defaults.
 4. **Hardcoded fallback** in `config.py` itself, only used if `config.json`
    is missing entirely (defense in depth — the repo always ships one).
+
+A **present-but-broken** `config/config.json` (invalid JSON, or valid JSON
+that isn't an object) is not silently ignored *or* left to crash with a raw
+traceback — `_load_json_config()` catches `json.JSONDecodeError` and a
+non-dict top level, and calls `sys.exit()` with a one-line, actionable
+message (the line/column of the syntax error, or a pointer to `git checkout
+-- config/config.json`). This matters more than it might for an ordinary
+config file because `config.py` is imported by literally every entry point
+in the project — an unhandled exception here takes down *everything*, not
+just one feature.
 
 This means: edit `config/config.json` for anything you want permanently
 changed and shared via git; put secrets or a one-off override in `.env`;
@@ -439,6 +532,33 @@ backends via the same `?`-placeholder style already used throughout
 | `delete_survey(conn, survey_id)` | `DELETE FROM surveys WHERE survey_id = ?`; returns whether a row was actually removed. |
 | `clear_all_surveys(conn)` | `DELETE FROM surveys` (no `WHERE`); returns the row count deleted. |
 
+**Filtered/bulk delete** (`delete-surveys` CLI, dashboard "Delete by filter"
+modal) adds a second, parallel set of functions built around one shared
+WHERE-clause builder rather than one function per filter combination:
+
+| Function | Purpose |
+|---|---|
+| `build_survey_filter(filters: dict) -> (where_sql, params)` | Turns a dict of optional keys (`ids`, `id_min`/`id_max`, `title`, `location`, `status`, `campaign`, `fieldworker`, `date_from`/`date_to`, `score_min`/`score_max`, `opened`) into one portable, AND-combined `?`-placeholder WHERE clause. Raises `FilterError` on an unparsable date. **Callers must refuse an all-empty `filters` dict themselves** — this function has no opinion on that and would happily return `""`, which matches every row. |
+| `count_matching_surveys(conn, where_sql, params)` | `SELECT COUNT(*) WHERE <clause>` — the number shown at every confirmation step, and re-checked immediately before the actual delete to catch drift. |
+| `preview_matching_surveys(conn, where_sql, params, limit=10)` | A *lean* query (5 columns, no `responses_json`) for the confirmation preview — deliberately separate from the full fetch below so previewing a large match doesn't pull every row's response payload just to show 10 lines. |
+| `fetch_matching_surveys(conn, where_sql, params)` | Every full matching row — used for the backup, right before deleting. |
+| `delete_matching_surveys(conn, where_sql, params)` | `DELETE FROM surveys WHERE <clause>`; returns the row count deleted. |
+
+Filter semantics, all portable across SQLite/SQL Server:
+- Text filters (`title`, `location`, `status`, `campaign`, `fieldworker`) are
+  case-insensitive substring matches (`LOWER(column) LIKE '%needle%'`) —
+  `fieldworker` checks both `fieldworker_name` and `fieldworker_login`.
+- `id_min`/`id_max` compare `CAST(survey_id AS INTEGER)` — `INTEGER` is
+  accepted by both backends (SQL Server treats it as an ISO synonym for
+  `INT`), so no dialect branch is needed even though `survey_id` is `TEXT`.
+- `date_from`/`date_to` filter on `submitted_at`; `date_to` is inclusive of
+  its whole day, implemented as `submitted_at < (date_to + 1 day)` rather
+  than a `SUBSTRING`/`substr` call, since those two functions aren't spelled
+  the same way in SQLite vs. T-SQL and the ISO-8601 strings sort correctly
+  either way.
+- `opened` (`yes`/`no` at the CLI and dashboard layers) maps to the
+  `opened` column's `1`/`0`.
+
 ### 12.2 Backups (`backup.py`)
 
 Every delete path backs up what it's about to remove to JSON **before**
@@ -446,6 +566,7 @@ deleting, unconditionally (no flag disables this):
 
 - `backup_survey(record)` → `data/backups/survey_<id>_deleted_<UTC timestamp>.json`
 - `backup_all_surveys(records)` → `data/backups/all_surveys_backup_<UTC timestamp>.json`
+- `backup_filtered_surveys(records)` → `data/backups/filtered_surveys_backup_<UTC timestamp>.json`
 
 `data/backups/` is gitignored (`.gitignore`). There is no restore command —
 re-importing a backup is a manual job (the JSON shape matches the `surveys`
@@ -459,9 +580,35 @@ blind), asks for a typed `yes` unless `--yes` is passed, refuses outright in
 a non-interactive shell without `--yes`, then backs up, deletes, logs a
 `logger.info` line, and regenerates the dashboard.
 
+**`delete-surveys [filters...] [--yes --expect-count N] [--db ...] [--no-open]`**
+(`cmd_delete_surveys`) — the general bulk-delete command, for "everything
+matching a rule" rather than one ID or literally everything:
+
+- Flags: `--ids` (comma-separated exact IDs), `--id-min`/`--id-max` (numeric
+  range), `--title`/`--location`/`--status`/`--campaign`/`--fieldworker`
+  (substring), `--date-from`/`--date-to`, `--score-min`/`--score-max`,
+  `--opened {yes,no}` — all optional, combined with AND via
+  `load.build_survey_filter()` (§12.1).
+- **Refuses to run if zero filters are given** (`_args_to_filters()` +
+  an explicit empty-dict check in `cmd_delete_surveys`) — this is the
+  guardrail that keeps this command from silently becoming a second way to
+  wipe everything; that's what `clear-surveys` is for, spelled differently
+  on purpose.
+- Fetches every matching row, prints the total plus a 10-row preview
+  (`survey_id`, title, location, date) so the confirmation isn't blind even
+  for a filter that matches hundreds of rows.
+- Same two-tier confirmation shape as `clear-surveys`: interactive means
+  typing the exact match count back; non-interactive means `--yes` **and**
+  `--expect-count N` both matching the live count. Immediately before
+  deleting, the count is re-checked once more (`count_matching_surveys`)
+  in case it drifted between the confirmation and the delete.
+- Backs up the matched rows (`backup.backup_filtered_surveys`), deletes via
+  the same WHERE clause, logs a `logger.warning` line (bulk delete, same
+  severity tier as `clear-surveys`), and regenerates the dashboard.
+
 **`clear-surveys [--yes --expect-count N] [--db ...] [--no-open]`**
 (`cmd_clear_surveys`) — deliberately the most heavily-gated action in the
-whole project:
+whole project, since it has no filter at all to narrow the blast radius:
 
 - Interactive: two separate prompts, not one — first the *exact current row
   count* typed back (a database with 1,807 rows requires typing `1807`),
@@ -473,10 +620,10 @@ whole project:
   grown or shrunk is refused rather than silently deleting the wrong number
   of rows.
 - Either path: backs up every row, deletes, logs a `logger.warning` line
-  (warning, not info — this is the one operation in the project loud enough
-  in `logs/etl.log` to warrant it), and regenerates the dashboard.
+  (warning, not info — this is loud enough in `logs/etl.log` to warrant it),
+  and regenerates the dashboard.
 
-Both commands reuse `_refresh_dashboard_after_change()`, which mirrors
+All three commands reuse `_refresh_dashboard_after_change()`, which mirrors
 `etl.py`'s own post-run dashboard regeneration (§6.5 step 7) — same
 `OPEN_DASHBOARD`/`--no-open` behavior, same "Dashboard updated: `<path>`"
 style output.
@@ -484,18 +631,29 @@ style output.
 ### 12.4 Live dashboard actions (`manage.py serve` / `server.py`)
 
 A dashboard is a static file — opening it doesn't start any code, so its
-Delete/Clear-all buttons have nothing to call by default. `generate_dashboard.generate()`
-takes an optional `server_token` argument; when set, the emitted page embeds
-`window.__DASHBOARD_LIVE__ = true` and the token, and its JS un-hides the
-`.live-only` controls (Delete in the survey Details view; "Clear ALL
-surveys…" above the table) — hidden and replaced by a `.static-only` note
-otherwise. `manage.py serve` is what sets that token.
+Delete/Delete-by-filter/Clear-all buttons have nothing to call by default.
+`generate_dashboard.generate()` takes an optional `server_token` argument;
+when set, the emitted page embeds `window.__DASHBOARD_LIVE__ = true` and
+the token, and its JS un-hides the `.live-only` controls (Delete in the
+survey Details view; "Delete by filter…" and "Clear ALL surveys…" above the
+table) — hidden and replaced by a `.static-only` note otherwise.
+`manage.py serve` is what sets that token.
 
 **Architecture** (`src/server.py`, stdlib `http.server` only, zero
 third-party dependencies):
 
 - `ThreadingHTTPServer` bound to **`127.0.0.1` only** — never reachable
-  from the network, regardless of firewall state.
+  from the network, regardless of firewall state. Served via a thin
+  `_DashboardServer` subclass with `allow_reuse_address = False`: the
+  stdlib default (`True`, i.e. `SO_REUSEADDR`) lets a *second* `serve`
+  process silently bind the same already-occupied port on Windows (POSIX
+  systems reject it; Windows' `SO_REUSEADDR` semantics don't), with no error
+  to either side and undefined routing of incoming requests between the
+  two — confirmed by reproducing it before the fix. With reuse disabled,
+  a second bind on an occupied port now fails immediately with a normal
+  `OSError` ("Only one usage of each socket address..."), which `run()`
+  already catches and reports as "Could not start the server... try a
+  different port."
 - `GET /` → 302 redirect to the newest `dashboard<N>.html`
   (`generate_dashboard.latest_report_filename()`). `GET /<name>` serves that
   exact file from `reports/` — basename-only matching plus a
@@ -503,15 +661,28 @@ third-party dependencies):
   from a pre-encoded `..%2f` attempt (verified: a raw `../` is normalized
   away by the HTTP client itself before it reaches the server, so the
   encoded form is the meaningful test — confirmed **403**).
-- `POST /api/delete-survey` `{"survey_id": "..."}` and
-  `POST /api/clear-surveys` `{"confirm": "DELETE ALL", "expected_count": N}`
-  — both require the header `X-Dashboard-Token` to equal the server's
+- Four `POST` endpoints, dispatched via a `ROUTES = {path: handler}` dict on
+  `DashboardHandler` so adding one is a one-line addition, not a growing
+  `if`/`elif` chain:
+  | Endpoint | Body | Purpose |
+  |---|---|---|
+  | `/api/delete-survey` | `{"survey_id": "..."}` | Single delete (§12.3's `delete-survey`, same underlying calls). |
+  | `/api/clear-surveys` | `{"confirm": "DELETE ALL", "expected_count": N}` | Wipe everything (§12.3's `clear-surveys`). |
+  | `/api/preview-filtered` | `{"filters": {...}}` | Read-only: returns `{"total": N, "preview": [...10 lean rows]}` for the "Delete by filter" modal's live preview. Powers `load.count_matching_surveys` + `load.preview_matching_surveys` — never deletes anything. |
+  | `/api/delete-filtered` | `{"filters": {...}, "expected_count": N}` | Bulk delete (§12.3's `delete-surveys`), same `filters` dict shape the CLI's flags map to (`title`, `location`, `status`, `campaign`, `fieldworker`, `id_min`/`id_max`, `date_from`/`date_to`, `score_min`/`score_max`, `opened`). |
+
+  All four require the header `X-Dashboard-Token` to equal the server's
   in-memory token (generated fresh via `secrets.token_hex(16)` each time
   `serve` starts) or the request is rejected with **403** before anything
-  else is checked. `clear-surveys`' `expected_count` is re-validated against
-  the database's actual current count server-side (not just trusted from
-  the browser) — a 409 if it doesn't match, same "stale count" protection
-  as the CLI's `--expect-count`.
+  else is checked — including the read-only preview endpoint, so the
+  token check stays a single uniform rule ("every `/api/*` call needs it")
+  rather than a rule with an exception to remember. `expected_count` on
+  both delete endpoints is re-validated against the database's actual
+  current count server-side (not just trusted from the browser) — a 409 if
+  it doesn't match, same "stale count" protection as the CLI's
+  `--expect-count`. An empty/all-blank `filters` dict is rejected with 400
+  by a shared `_build_filter_or_error()` helper, mirroring the CLI's
+  no-filters refusal.
 - Why the token matters even though the server is localhost-only: any other
   site open in another browser tab *can* fire a same-origin-policy-exempt
   `fetch()` at `http://127.0.0.1:<port>/api/...` (the classic CSRF shape —
@@ -522,19 +693,36 @@ third-party dependencies):
   forged request is rejected at the 403 check. This is the whole reason a
   request body flag alone (`confirm`/`expected_count`) wouldn't have been
   enough on its own.
-- Both endpoints reuse the exact same `load.py`/`backup.py` functions as the
-  CLI commands (§12.1/§12.2) — no separate deletion logic to keep in sync.
-  On success, each regenerates the dashboard (same token, so the new page
-  is live too) and responds `{"ok": true, "redirect": "/dashboard<N+1>.html"}`;
-  the page's JS navigates there, so the browser lands on a dashboard that
-  already reflects the change.
+- All four endpoints reuse the exact same `load.py`/`backup.py` functions as
+  the CLI commands (§12.1/§12.2) — no separate deletion or filter-building
+  logic to keep in sync. On success, the two mutating endpoints regenerate
+  the dashboard (same token, so the new page is live too) and respond
+  `{"ok": true, "redirect": "/dashboard<N+1>.html"}`; the page's JS
+  navigates there, so the browser lands on a dashboard that already
+  reflects the change.
+- **Dashboard UI** (`generate_dashboard.py`): the "Delete by filter…" button
+  opens a second modal (`#filter-modal-backdrop`, sharing `.modal-backdrop`/
+  `.modal-box` CSS with the survey-details modal via classes rather than
+  IDs, since both exist in the same page) with one input per filter field —
+  text inputs for title/location/status/campaign/fieldworker, number inputs
+  for the ID and score ranges, native `<input type="date">` pickers for the
+  date range, and a select for opened yes/no/any. A **Preview matches**
+  button calls `/api/preview-filtered` and renders the count plus up to 10
+  rows; **Delete matching surveys…** stays disabled until a preview has run
+  at least once (so the count shown at confirmation time is never stale
+  relative to what's about to be sent), then confirms via `window.confirm()`
+  and — for more than one match — a second `window.prompt()` requiring the
+  exact match count typed back, the same two-tier weighting as "Clear ALL
+  surveys…" one tier down from it.
 - Verified end-to-end against a disposable copy of the database (never the
   real `data/etl.db`): delete-by-ID removes exactly that row; a wrong
-  `X-Dashboard-Token` is rejected with 403; `clear-surveys` with a
-  deliberately wrong `expected_count` is rejected with 409 and deletes
-  nothing; with the correct count it empties the table and writes the
-  all-rows backup.
+  `X-Dashboard-Token` is rejected with 403 on every endpoint; `clear-surveys`
+  and `delete-filtered` both reject a deliberately wrong `expected_count`
+  with 409 and delete nothing, and succeed and delete exactly the matched
+  rows with the correct one; `preview-filtered` returns an accurate count
+  and capped preview list; an empty `filters` dict is rejected with 400.
 - `run.bat serve` needs no changes to `run.bat` itself — the existing
   argument pass-through branch already forwards any subcommand verbatim to
-  `manage.py`, so `run.bat serve`, `run.bat delete-survey <id>`, and
-  `run.bat clear-surveys` all just work.
+  `manage.py`, so `run.bat serve`, `run.bat delete-survey <id>`,
+  `run.bat delete-surveys [filters...]`, and `run.bat clear-surveys` all
+  just work.
