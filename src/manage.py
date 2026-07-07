@@ -11,6 +11,7 @@ Usage:
     python manage.py delete-surveys [--title ...] [--location ...] [--id-min N --id-max N] [...] [--yes --expect-count N]
     python manage.py clear-surveys [--yes --expect-count N]
     python manage.py serve [--port 8765]
+    python manage.py set-client [--id -1044]
     python manage.py setup-db
 
 Each subcommand is a thin wrapper around the corresponding standalone script
@@ -21,6 +22,7 @@ Each subcommand is a thin wrapper around the corresponding standalone script
 import argparse
 import sys
 
+import api_client
 import backup
 import browse_surveys
 import etl
@@ -302,6 +304,68 @@ def cmd_serve(args: argparse.Namespace) -> int:
     return server.run(port=args.port, no_open=args.no_open)
 
 
+def cmd_set_client(args: argparse.Namespace) -> int:
+    """Discovers, picks, and saves the ClientOrFormIDs the pipeline scrapes
+    -- a friendlier alternative to hand-editing config/config.json or .env.
+    See README.md section 4 and AGENTS.md for what this value actually
+    means (which client/brand/form scope on the Shopmetrics site to query)."""
+    import config
+
+    if args.id:
+        config.SHOPMETRICS_CLIENT_OR_FORM_IDS = args.id
+        config.save_env_values({"SHOPMETRICS_CLIENT_OR_FORM_IDS": args.id})
+        print(f"{GREEN}Saved SHOPMETRICS_CLIENT_OR_FORM_IDS={args.id} to .env.{RESET}")
+        return 0
+
+    if not etl.ensure_api_credentials():
+        return 1
+
+    print(f"\n{BOLD}Looking up the clients/forms your Shopmetrics API credentials can query...{RESET}")
+    try:
+        rows = api_client.list_client_or_form_ids()
+    except api_client.ShopmetricsAPIError as e:
+        print(f"{RED}Could not fetch the client list: {e}{RESET}")
+        return 1
+
+    level1 = [r for r in rows if r.get("HierarchyLevel") == 1]
+    if not level1:
+        print(f"{YELLOW}No client/form entries returned for this API user.{RESET}")
+        return 1
+
+    print(f"\nCurrently scraping: {BOLD}SHOPMETRICS_CLIENT_OR_FORM_IDS={config.SHOPMETRICS_CLIENT_OR_FORM_IDS}{RESET}\n")
+    print(f"{BOLD}{'#':<5}{'ID':<10}Name{RESET}")
+    for i, r in enumerate(level1, 1):
+        flag = "  (current)" if str(r["ID"]) == str(config.SHOPMETRICS_CLIENT_OR_FORM_IDS) else ""
+        print(f"{i:<5}{str(r['ID']):<10}{r['Name']}{flag}")
+
+    if not sys.stdin.isatty():
+        print(f"\n{YELLOW}Non-interactive context -- pass --id <value> to set one directly (see the list above).{RESET}")
+        return 1
+
+    try:
+        choice = input("\nType a number from the list above, an ID directly, or press Enter to cancel: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print(f"\n{RED}Cancelled.{RESET}")
+        return 1
+
+    if not choice:
+        print("Cancelled — nothing changed.")
+        return 0
+
+    if choice.isdigit() and 1 <= int(choice) <= len(level1):
+        chosen = level1[int(choice) - 1]
+        chosen_id, chosen_name = str(chosen["ID"]), chosen["Name"]
+    else:
+        chosen_id, chosen_name = choice, None
+
+    config.SHOPMETRICS_CLIENT_OR_FORM_IDS = chosen_id
+    config.save_env_values({"SHOPMETRICS_CLIENT_OR_FORM_IDS": chosen_id})
+    label = f"{chosen_id} ({chosen_name})" if chosen_name else chosen_id
+    print(f"\n{GREEN}Saved. SHOPMETRICS_CLIENT_OR_FORM_IDS={label} written to .env.{RESET}")
+    print("Run the pipeline again to scrape this client/form's surveys.")
+    return 0
+
+
 def cmd_setup_db(args: argparse.Namespace) -> int:
     _apply_db_override(args)
     import config
@@ -378,6 +442,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_serve.add_argument("--port", type=int, default=8765, help="Local port to listen on (default: 8765)")
     p_serve.add_argument("--no-open", action="store_true", help="Don't open the dashboard in the browser on start")
     p_serve.set_defaults(func=cmd_serve)
+
+    p_client = sub.add_parser(
+        "set-client",
+        help="Choose which Shopmetrics ClientOrFormIDs to scrape (lists the ones your credentials can access).",
+    )
+    p_client.add_argument("--id", help="Set directly without the interactive list, e.g. --id -1044")
+    p_client.set_defaults(func=cmd_set_client)
 
     p_setup = sub.add_parser("setup-db", parents=[_db_parent()], help="Create/verify the database for the current DB_BACKEND.")
     p_setup.set_defaults(func=cmd_setup_db)

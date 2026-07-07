@@ -148,6 +148,10 @@ def _clear_all() -> None:
     _run(["clear-surveys"])
 
 
+def _set_client() -> None:
+    _run(["set-client"])
+
+
 # (key, one-line label shown in the menu, section header it's grouped
 # under, the function to call)
 _MENU = [
@@ -156,9 +160,10 @@ _MENU = [
     ("3", "Refresh the dashboard (regenerate the HTML report)", "EXPLORE YOUR DATA", _dashboard),
     ("4", "Open the dashboard with LIVE Delete buttons (serve mode)", "EXPLORE YOUR DATA", _serve),
     ("5", "Run the pipeline again (scrape newest surveys from Shopmetrics)", "GET MORE DATA", _run_pipeline),
-    ("6", "Delete ONE survey, by its ID", "REMOVE DATA — see README.md §2.2 first", _delete_one),
-    ("7", "Delete surveys matching a filter (title / location / date / ID range / ...)", "REMOVE DATA — see README.md §2.2 first", _delete_filtered),
-    ("8", "Delete ALL surveys — drastic, asks for extra confirmation", "REMOVE DATA — see README.md §2.2 first", _clear_all),
+    ("6", "Change which client/form to scrape (lists what your credentials can access)", "SETTINGS", _set_client),
+    ("7", "Delete ONE survey, by its ID", "REMOVE DATA — see README.md §2.2 first", _delete_one),
+    ("8", "Delete surveys matching a filter (title / location / date / ID range / ...)", "REMOVE DATA — see README.md §2.2 first", _delete_filtered),
+    ("9", "Delete ALL surveys — drastic, asks for extra confirmation", "REMOVE DATA — see README.md §2.2 first", _clear_all),
 ]
 
 
@@ -197,7 +202,7 @@ def main() -> int:
 
         match = next((m for m in _MENU if m[0] == choice), None)
         if match is None:
-            print(f"{RED}Not a number from the list above -- type one of 1-8, \"menu\", or 0 to exit.{RESET}")
+            print(f"{RED}Not a number from the list above -- type one of 1-9, \"menu\", or 0 to exit.{RESET}")
             continue
 
         match[3]()

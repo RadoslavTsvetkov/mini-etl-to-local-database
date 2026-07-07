@@ -106,6 +106,7 @@ def build_arg_parser(add_help: bool = True) -> argparse.ArgumentParser:
     parser.add_argument("--command-mode", choices=["mock", "live"], help="Mark-opened Command API mode (default: COMMAND_MODE from .env)")
     parser.add_argument("--db", choices=["sqlite", "sqlserver"], help="Database backend (default: DB_BACKEND from .env)")
     parser.add_argument("--max-records", type=int, help="Max survey instances to pull in api mode (default: SHOPMETRICS_MAX_RECORDS_PER_RUN from .env)")
+    parser.add_argument("--client", help="ClientOrFormIDs to scrape, for this run only (default: SHOPMETRICS_CLIENT_OR_FORM_IDS from .env/config.json; see 'manage.py set-client' to change the saved default)")
     parser.add_argument("--no-open", action="store_true", help="Don't open the regenerated dashboard in the browser")
     return parser
 
@@ -119,6 +120,8 @@ def apply_overrides(args: argparse.Namespace) -> None:
         config.DB_BACKEND = args.db
     if args.max_records:
         config.SHOPMETRICS_MAX_RECORDS_PER_RUN = args.max_records
+    if args.client:
+        config.SHOPMETRICS_CLIENT_OR_FORM_IDS = args.client
     if getattr(args, "no_open", False):
         config.OPEN_DASHBOARD = False
 

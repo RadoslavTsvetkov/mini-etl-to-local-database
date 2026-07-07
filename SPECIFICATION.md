@@ -43,7 +43,7 @@ Everything below is taken from `_KNOWLEDGEBASE/023-APIs/`, not invented. Article
 | Command API mode | Configurable: `COMMAND_MODE=mock` (default) simulates a successful "mark opened" call with no network access; `COMMAND_MODE=live` calls the real Command API v2. |
 | Base URL | `SHOPMETRICS_BASE_URL`, default `https://training212.shopmetrics.com` (a Shopmetrics training/sandbox site, per APIINV3's recommendation to test against training before production). |
 | Auth credentials | `SHOPMETRICS_CLIENT_ID` / `SHOPMETRICS_CLIENT_SECRET` — account-specific, must be created by an admin in Shopmetrics (Administration → Tools and Settings → Site Settings → Other → API v2 Authorization – Client Credentials, per APIAUT). Unset in `.env.example`; required since `EXTRACTION_MODE=api` is the default (prompted for interactively and saved automatically the first time — §4.2/§7.2 — rather than needing to be filled in by hand before the first run). |
-| Client/Form scope | `SHOPMETRICS_CLIENT_OR_FORM_IDS` — the `ClientOrFormIDs` filter value(s) for the Query API; account-specific, must be looked up via the `Parameter_ClientOrFormIDs` dataset (APICAP). Placeholder default `-995`. |
+| Client/Form scope | `SHOPMETRICS_CLIENT_OR_FORM_IDS` — the `ClientOrFormIDs` filter value(s) for the Query API; account-specific, must be looked up via the `Parameter_ClientOrFormIDs` dataset (APICAP). Checked-in default `-995` ("Delight Coffee (CX Analytics Demo)" on `training212.shopmetrics.com`, this project's test account). Discover available values with `run.bat browse clients` or `run.bat set-client`; the latter also saves a choice to `.env` interactively (or via `--id`) instead of requiring a manual edit. A one-off override for a single run: `run.bat run --client <id>`. See §7.3. |
 | Configuration format | Split in two: **`config/config.json`** (checked into git) holds all non-secret settings and defaults; **`.env`** (gitignored) holds secrets (API credentials) and any ad-hoc local overrides. See §7. |
 | Distribution / setup | Two `.bat` files at the repo root: `install.bat` (one-time: creates a `.venv`, installs dependencies, seeds `.env` from the template) and `run.bat` (forwards to `manage.py`; bare `run.bat` with no args scrapes the live API, prompting once for credentials if `.env` is empty, then generates the next numbered dashboard and opens it in the browser). Goal: clone the repo on any Windows machine with Python 3.10+, run `install.bat` once, then `run.bat` — no manual Python/pip steps, no manual `.env` editing (the credentials prompt fills it). See §4.2. |
 | Source layout | All Python modules live under `src/` (with `src/db/` as the database-access sub-package), separate from `config/` (JSON config), `data/` (sample input + generated SQLite file), `logs/`, and `reports/` (generated dashboard). See §4.1. |
@@ -71,7 +71,7 @@ specification/                        (repo root)
 │   └── config.json                   # All non-secret configuration (checked into git) -- see §7.1
 │
 ├── src/                               # All Python source code
-│   ├── manage.py                      # Single CLI entry point: run / view / browse / dashboard / delete-survey / delete-surveys / clear-surveys / serve / setup-db
+│   ├── manage.py                      # Single CLI entry point: run / view / browse / dashboard / set-client / delete-survey / delete-surveys / clear-surveys / serve / setup-db
 │   ├── menu.py                         # Interactive numbered menu shown after run.bat's default flow -- see §4.3
 │   ├── etl.py                          # ETL pipeline orchestration (also runnable directly, with CLI flags)
 │   ├── extract.py                      # Extraction step (file or live Query API)
@@ -195,17 +195,17 @@ it's specifically `python src/menu.py`, or just double-click `run.bat`).
   the subprocess (`delete-survey`'s `yes`, `clear-surveys`'s typed count +
   `DELETE ALL`) works exactly as it would standalone — including its
   existing refusal in a non-interactive context, unchanged.
-- The 8 options are grouped under three plain-English headers ("EXPLORE
-  YOUR DATA", "GET MORE DATA", "REMOVE DATA — see README.md §2.2 first")
-  rather than presented as a flat list, so the *shape* of the risk (viewing
-  vs. fetching vs. deleting) is visible before a number is even read.
-  Options that need more input ask for it conversationally (a survey ID; a
-  handful of filter fields, blank to skip each) rather than expecting flag
-  syntax — option 7 (filtered delete) only asks for the most common fields
-  (title, location, status, ID range, date range) and points to
-  `--help`/README §2.2 for the rest (score range, campaign, fieldworker,
-  opened yes/no, exact ID lists) rather than reproducing every
-  `delete-surveys` flag as a prompt.
+- The 9 options are grouped under four plain-English headers ("EXPLORE
+  YOUR DATA", "GET MORE DATA", "SETTINGS", "REMOVE DATA — see README.md
+  §2.2 first") rather than presented as a flat list, so the *shape* of the
+  risk (viewing vs. fetching vs. configuring vs. deleting) is visible
+  before a number is even read. Options that need more input ask for it
+  conversationally (a survey ID; a handful of filter fields, blank to skip
+  each) rather than expecting flag syntax — option 8 (filtered delete) only
+  asks for the most common fields (title, location, status, ID range, date
+  range) and points to `--help`/README §2.2 for the rest (score range,
+  campaign, fieldworker, opened yes/no, exact ID lists) rather than
+  reproducing every `delete-surveys` flag as a prompt.
 - `menu`/`help`/`?` reprint the option list (useful once it's scrolled off).
   A blank Enter is treated the same as `menu` (reprints rather than exits)
   so an accidental keypress can't close the menu — only an explicit
@@ -441,6 +441,52 @@ prompt so they can be re-entered; each entry is written into `.env`
 network failure during verification aborts without prompting (the saved
 values may be fine). Non-interactive invocations print instructions and
 exit with code 1 instead of hanging on a prompt.
+
+### 7.3 Choosing the client/form scope (`SHOPMETRICS_CLIENT_OR_FORM_IDS`)
+
+A single Shopmetrics API user's credentials can potentially see multiple
+clients, brands, or survey forms — `ClientOrFormIDs` is *which one* every
+extraction call is filtered by (§2's `list_surveys`/`query_new_surveys`).
+It's a checked-in, non-secret setting (`config/config.json`, default
+`-995`), not a credential, but choosing the right value still isn't
+obvious to a new user, so it gets the same "don't make them hand-edit a
+file" treatment as the credentials themselves:
+
+- **`manage.py browse clients`** (pre-existing, read-only) lists every
+  `ClientOrFormIDs` value the current credentials can query, by calling
+  `api_client.list_client_or_form_ids()` — the `Parameter_ClientOrFormIDs`
+  dataset (APICAP) — and filtering to `HierarchyLevel == 1` entries.
+- **`manage.py set-client [--id <value>]`** (`cmd_set_client` in
+  `manage.py`) builds on the same call: with no `--id`, it verifies
+  credentials (`etl.ensure_api_credentials`), fetches the same list, prints
+  it as a numbered table with the currently-configured value marked
+  `(current)`, and prompts for either a list number or a literal ID typed
+  directly (a literal ID isn't restricted to what's shown — deeper
+  hierarchy levels than `HierarchyLevel == 1` may also be valid values,
+  consistent with `browse clients` only ever having shown the top level).
+  The choice is written to `.env` via `config.save_env_values()` — the
+  exact same persistence mechanism the credentials prompt uses — so it
+  survives future runs without touching `config/config.json`. With `--id`,
+  it skips the list/prompt entirely and saves directly (the non-interactive
+  path; also usable from a script). A blank Enter at the prompt cancels
+  with nothing changed; a non-interactive context without `--id` prints
+  instructions and exits 1, the same pattern as the credentials prompt.
+- **`manage.py run --client <value>`** (new flag on `etl.build_arg_parser`,
+  applied in `etl.apply_overrides`) overrides `SHOPMETRICS_CLIENT_OR_FORM_IDS`
+  for that invocation only — same one-run-only semantics as `--mode`/`--db`/
+  `--max-records` — without writing anything to `.env` or `config.json`.
+- Exposed in `menu.py` as option **6**, under a new **SETTINGS** section
+  (between "GET MORE DATA" and "REMOVE DATA" — the delete options were
+  renumbered 6/7/8 → 7/8/9 to make room, and every reproduction of the menu
+  banner in README.md was updated to match).
+
+Verified end-to-end against the real account: `browse clients`/`set-client`
+both list all ~220 real client/form entries (confirmed the configured
+`-995` shows up correctly flagged `(current)`); `--id` sets and persists a
+value without the interactive path; `run --client <id>` scopes a single run
+to a different client (confirmed against a client with zero surveys,
+correctly returning `Extracted 0 survey record(s)` rather than an error)
+without touching the saved `.env` default.
 
 ## 8. Sample Data Shape (file mode)
 

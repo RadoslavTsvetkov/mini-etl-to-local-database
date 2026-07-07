@@ -38,8 +38,8 @@ deactivated, or regenerated), you're asked to re-enter them and `.env` is
 rewritten.
 
 To skip straight to one specific command (`view`, `browse`, `dashboard`,
-`serve`, `delete-survey`, `delete-surveys`, `clear-surveys`, `setup-db`, or
-any flag) instead of going through the menu, open a terminal in this folder
+`serve`, `set-client`, `delete-survey`, `delete-surveys`, `clear-surveys`,
+`setup-db`, or any flag) instead of going through the menu, open a terminal in this folder
 and run `run.bat <command> ...` — it forwards whatever you type to the
 actual program (see the sections below for the full list). Only the plain
 double-click (no arguments) shows the menu; running `run.bat <command>`
@@ -116,10 +116,12 @@ Full command-line details for everything below are in README.md.
     4)  Open the dashboard with LIVE Delete buttons (serve mode)
   GET MORE DATA
     5)  Run the pipeline again (scrape newest surveys from Shopmetrics)
+  SETTINGS
+    6)  Change which client/form to scrape (lists what your credentials can access)
   REMOVE DATA — see README.md §2.2 first
-    6)  Delete ONE survey, by its ID
-    7)  Delete surveys matching a filter (title / location / date / ID range / ...)
-    8)  Delete ALL surveys — drastic, asks for extra confirmation
+    7)  Delete ONE survey, by its ID
+    8)  Delete surveys matching a filter (title / location / date / ID range / ...)
+    9)  Delete ALL surveys — drastic, asks for extra confirmation
 
     0)  Exit
 ```
@@ -379,6 +381,41 @@ mode defaults) lives in `config/config.json`; edit that file directly if you
 want to change the checked-in defaults, or uncomment the matching line in
 `.env` for a local-only override — see `.env.example`.
 
+**What "client/form ID" (`SHOPMETRICS_CLIENT_OR_FORM_IDS`) actually means:**
+a Shopmetrics API user's credentials can potentially see many different
+clients, brands, or survey forms — `ClientOrFormIDs` (a negative number,
+e.g. `-995`) is *which one* the pipeline scrapes. It's checked into
+`config/config.json` alongside `SHOPMETRICS_BASE_URL`, so cloning this repo
+and entering *credentials valid for that same site and scope* reproduces
+the same live backlog this project has been built and tested against
+(currently "Delight Coffee (CX Analytics Demo)" on
+`training212.shopmetrics.com`, ID `-995`) — see the FAQ at the end of this
+section if you're unsure whether that applies to you.
+
+- **To see every ID your credentials can access**, run `run.bat browse
+  clients` (read-only, always safe) — it prints every ID with its name.
+- **To change which one gets scraped**, the easy way is
+  `run.bat set-client` (or menu option **6**): it fetches that same list,
+  lets you pick a number (or paste an ID directly), and saves your choice
+  to `.env` for you — no manual file editing needed. Non-interactive/
+  scripted: `run.bat set-client --id -1044` sets it directly.
+- **For a one-off run without changing the saved default**, add `--client`
+  to `run`: `run.bat run --client -1044`.
+- The manual way still works too, if you'd rather: edit
+  `SHOPMETRICS_CLIENT_OR_FORM_IDS` directly in `config/config.json` (shared
+  default) or `.env` (personal override).
+
+> **FAQ: "I cloned this from GitHub and entered my own credentials — will I
+> get the same ~1800 surveys?"** Only if those credentials have access to
+> the *same* Shopmetrics site and client scope (`training212.shopmetrics.com`,
+> `-995`) this project defaults to. If you have your own, separate
+> Shopmetrics account instead, you'll need to point `SHOPMETRICS_BASE_URL`/
+> `SHOPMETRICS_CLIENT_OR_FORM_IDS` at *your* account (`run.bat set-client`
+> after your credentials are set up, or edit `config/config.json`/`.env`
+> directly) — you'll then get *your* account's real, live survey backlog
+> instead, whatever size that happens to be. That's the pipeline correctly
+> scraping whichever account it's actually authorized against, not a bug.
+
 **`.env` is listed in `.gitignore` and will never be committed.** Never
 paste your `client_secret`, `client_id`, or Shopmetrics login into any
 tracked file (`SPECIFICATION.md`, `config/config.json`, commit messages,
@@ -462,6 +499,7 @@ you want the full dataset in both places.
 | Mark-opened mode | `--command-mode` | `COMMAND_MODE` (config.json) | `mock` (default, no network) or `live` (real Command API, **writes real data** — currently returns HTTP 500 on this account, §10.3) |
 | Database backend | `--db` | `DB_BACKEND` (config.json) | `sqlite` (default, `data/etl.db`, no extra install) or `sqlserver` (local SQL Server, viewable in SSMS) |
 | Records per run | `--max-records` | `SHOPMETRICS_MAX_RECORDS_PER_RUN` (config.json) | `5000` (default — collects the full backlog every `api` run). Lower it for a small test batch. |
+| Client/form scraped | `--client` (one-off) | `SHOPMETRICS_CLIENT_OR_FORM_IDS` (config.json/.env) | `-995` (default). Change the saved value with `run.bat set-client` (interactive picker) or `set-client --id <value>`; see §4.1. |
 | Auto-open dashboard | `--no-open` | `OPEN_DASHBOARD` (config.json/.env) | `true` (default): open the newly numbered `reports/dashboard<N>.html` in the browser after `run`/`dashboard`. |
 | SQL Server instance | — | `SQLSERVER_SERVER` (config.json) | `.\SQLEXPRESS` (default) |
 | SQL Server database | — | `SQLSERVER_DATABASE` (config.json) | `ShopmetricsETL` (default); created automatically if missing |

@@ -52,9 +52,11 @@ and the client/account scope (`ClientOrFormIDs=-995`) are already the
 checked-in defaults in `config/config.json`, matching the account this
 project has been built and tested against ("Delight Coffee (CX Analytics
 Demo)"). If you're pointing this at a *different* Shopmetrics site or
-account, change `SHOPMETRICS_BASE_URL`/`SHOPMETRICS_CLIENT_OR_FORM_IDS` in
-`config/config.json` (or `.env` for a local-only override) — see
-"Configuration system" below.
+account, change `SHOPMETRICS_BASE_URL` in `config/config.json`, then use
+`manage.py set-client` (interactive: lists every scope your credentials
+can see and saves your pick) or `manage.py run --client <id>` (one-off)
+rather than hand-editing `SHOPMETRICS_CLIENT_OR_FORM_IDS` — see "Which
+Shopmetrics account/scope actually gets scraped" below.
 
 **Step 3 — Run it.** Double-click `run.bat` (or from a terminal:
 `.\run.bat`, or cross-platform `python src/manage.py run`). Two outcomes:
@@ -181,9 +183,10 @@ Everything goes through **`src/manage.py`** as the single CLI entry point;
 | Command | What it does |
 |---|---|
 | `run.bat` *(no args)* | The primary double-click flow: `run --mode api --no-open`, opens the new dashboard via `start`, then launches `menu.py`. Only this exact invocation shows the menu. |
-| `manage.py run [--mode file\|api] [--command-mode mock\|live] [--db sqlite\|sqlserver] [--max-records N] [--no-open]` | Full pipeline: extract → load (dedup) → mark opened → log → regenerate dashboard. |
+| `manage.py run [--mode file\|api] [--command-mode mock\|live] [--db sqlite\|sqlserver] [--max-records N] [--client ID] [--no-open]` | Full pipeline: extract → load (dedup) → mark opened → log → regenerate dashboard. `--client` scopes just this run to a different `ClientOrFormIDs` without touching the saved default. |
 | `manage.py view [all\|surveys\|runs\|<survey_id>]` | Colorized terminal view of the local DB (read-only). |
-| `manage.py browse clients` / `browse surveys --client <id>` / `browse show <id>` | Read-only live Shopmetrics lookup — **never touches the local DB**, always hits the real API regardless of `EXTRACTION_MODE`. |
+| `manage.py browse clients` / `browse surveys --client <id>` / `browse show <id>` | Read-only live Shopmetrics lookup — **never touches the local DB**, always hits the real API regardless of `EXTRACTION_MODE`. `browse clients` lists every `ClientOrFormIDs` value the credentials can access. |
+| `manage.py set-client [--id <value>]` | Discovers and saves which `ClientOrFormIDs` gets scraped (interactive numbered picker, or `--id` to set directly) — see "Which Shopmetrics account/scope gets scraped" below. |
 | `manage.py dashboard [output_path] [--no-open]` | Regenerate the HTML dashboard without running the pipeline. |
 | `manage.py delete-survey <id> [--yes]` | Delete one survey (backs up first). |
 | `manage.py delete-surveys [--title/--location/--status/--campaign/--fieldworker/--id-min/--id-max/--ids/--date-from/--date-to/--score-min/--score-max/--opened] [--yes --expect-count N]` | Bulk delete by filter (AND-combined). **Refuses with zero filters.** |
@@ -279,6 +282,57 @@ It should print `api`. If it prints `file`, work down the list above in
 order (1 through 5) until you find the layer that's setting it, starting
 with the environment-variable checks since those are the easiest to forget
 about and the highest precedence.
+
+### Which Shopmetrics account/scope actually gets scraped
+
+`SHOPMETRICS_CLIENT_OR_FORM_IDS` (checked into `config/config.json`,
+default `"-995"`) is a *separate* question from credentials, and just as
+easy to misunderstand: a single set of API credentials can potentially see
+many different clients, brands, or survey forms on a Shopmetrics site —
+`ClientOrFormIDs` says **which one** every extraction call is scoped to
+(it's the literal `{"name": "ClientOrFormIDs", "value": "-995"}` parameter
+in the request body — see "Exactly how a scrape happens" below). `-995`
+happens to correspond to "Delight Coffee (CX Analytics Demo)" on
+`training212.shopmetrics.com`, the specific account this project has been
+built and tested against.
+
+**This is why "clone the repo, enter credentials, get 1804 surveys" isn't
+universally true** — it's true only if the credentials entered are valid
+*for that same site and scope*. Someone with a different, unrelated
+Shopmetrics account needs to point this at their own scope instead (their
+credentials won't have access to `-995` on `training212.shopmetrics.com`
+in the first place, so extraction would return nothing or fail auth, not
+silently substitute a different account's data).
+
+**How to discover valid values:** `manage.py browse clients` (read-only,
+always safe) calls `api_client.list_client_or_form_ids()` — the
+`Parameter_ClientOrFormIDs` dataset — and prints every ID + name the
+current credentials can query.
+
+**How to change the saved value** (the user-friendly way, added
+specifically so nobody has to hand-edit JSON): `manage.py set-client`.
+With no `--id`, it verifies credentials first (reuses
+`etl.ensure_api_credentials`, so it prompts if they're not set up yet),
+fetches the same client list, prints it as a numbered table with the
+current value flagged `(current)`, and accepts either a list number or a
+literal ID typed directly (deeper hierarchy levels than what's listed are
+still valid — `browse clients`/`set-client` only ever show
+`HierarchyLevel == 1`). The choice is saved to `.env` via
+`config.save_env_values()` — the exact same mechanism the credentials
+prompt uses. `manage.py set-client --id -1044` skips the interactive list
+entirely (scriptable). `manage.py run --client -1044` overrides it for one
+run only, without saving anything — mirrors `--mode`/`--db`/`--max-records`.
+Also reachable from `menu.py` as option **6**, under a new "SETTINGS"
+section (the delete options were renumbered 6/7/8 → 7/8/9 to make room —
+if you're grepping for a specific menu option number in old context, check
+which numbering it predates).
+
+Verified live: `set-client`'s list correctly showed all ~220 real
+client/form entries this account's credentials can see, with `-995`
+correctly flagged `(current)`; `--id` persists without the interactive
+path; a `--client` override to a different, empty client correctly
+returned `Extracted 0 survey record(s)` (not an error) without touching
+the saved `.env` value.
 
 ## Database backends — portability rules
 
