@@ -24,9 +24,17 @@ echo "run.bat run --mode file" for the old offline sample-data run.^)
 echo.
 
 "%VENV_PY%" "%~dp0src\manage.py" run --mode api --no-open
-if errorlevel 1 goto :finish
+if errorlevel 1 (
+    echo.
+    echo The scrape above didn't finish cleanly ^(see the message above for why^).
+    echo Opening the menu anyway -- you can still view existing data, change
+    echo which client/form to scrape ^(option 6^), or retry ^(option 5^) from there.
+)
 
-rem Open the newest generated report (dir /o-d lists newest first).
+rem Open the newest generated report (dir /o-d lists newest first) -- and
+rem always fall through to the menu below, whether the run above succeeded
+rem or not, so there's always a way forward instead of the window just
+rem closing on failure.
 set "LATEST="
 for /f "delims=" %%F in ('dir /b /o-d "%~dp0reports\dashboard*.html" 2^>nul') do if not defined LATEST set "LATEST=%%F"
 if defined LATEST (
