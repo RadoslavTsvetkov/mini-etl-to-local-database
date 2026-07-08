@@ -43,6 +43,18 @@ exact SQL Server equivalents (e.g. `TEXT` → `NVARCHAR`, `INTEGER` 0/1 → `BIT
 | `fieldworker_name` | TEXT, nullable | `Shopper Name`. |
 | `workflow_step_id` | INTEGER, nullable | `WorkflowStepID` at time of extraction. |
 
+The Client Analytics dataset offers many more fields than this (full
+location address, raw points, custom location properties, export/RFA/audit
+status flags — see SPECIFICATION.md section 2 for the complete list this
+project has actually checked against the live API). A later pass queried
+and stored all of them, then reverted it: nothing in this codebase
+(dashboard, view, `delete-surveys` filters) ever read any of the extra
+columns, so they were dropped again (`db/setup_db.py`'s
+`_REMOVED_SURVEY_COLUMNS`, `ALTER TABLE DROP COLUMN`) rather than left as
+dead weight. If a future feature genuinely needs one of those fields, add
+it back deliberately — `api_client._SURVEY_LIST_FIELDS` is one line to
+extend and the query is already proven to return them.
+
 ## `etl_runs`
 
 One row per pipeline execution.

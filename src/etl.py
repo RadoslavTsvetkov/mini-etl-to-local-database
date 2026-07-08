@@ -183,6 +183,28 @@ def run() -> int:
         error_count += len(extract_errors)
         logger.info("Extracted %d survey record(s)", len(records))
 
+        if config.EXTRACTION_MODE == "api" and not records and not extract_errors:
+            # Not an error (exit code / status stay "success") -- the API
+            # call itself worked fine, it just legitimately found nothing
+            # for this ClientOrFormIDs. But "0 records, 0 errors" looks
+            # identical to a clean, expected result, and the single most
+            # common cause is credentials that authenticate fine but were
+            # never granted access to this specific client/scope -- flag
+            # it loudly right here instead of leaving a silently-empty
+            # dashboard as the only symptom.
+            print(f"\n{BOLD}{YELLOW}Extracted 0 surveys from the live API — this call succeeded (no error),")
+            print(f"but that's still worth double-checking, not assuming is correct:{RESET}")
+            print(f"  1) These credentials may authenticate fine but not actually have access")
+            print(f"     to ClientOrFormIDs={config.SHOPMETRICS_CLIENT_OR_FORM_IDS}. Run")
+            print(f"     `run.bat browse clients` and confirm {config.SHOPMETRICS_CLIENT_OR_FORM_IDS} is")
+            print(f"     actually in the list — if it's missing, these credentials don't have")
+            print(f"     access to it; use `run.bat set-client` to pick one that IS listed, or")
+            print(f"     ask a Shopmetrics admin to grant access to the right one.")
+            print(f"  2) Every survey under this scope may genuinely already be marked opened")
+            print(f"     by this specific API user (rarer — 'opened' status is tracked per API")
+            print(f"     user, so this normally only happens on a repeat run, not a first one).")
+            print(f"{YELLOW}See AGENTS.md, \"Troubleshooting: 0 surveys extracted\", for the full checklist.{RESET}\n")
+
         inserted_ids, duplicate_count = load.load_surveys(conn, records)
         logger.info(
             "Loaded %d new survey(s), skipped %d duplicate(s)",

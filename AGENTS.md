@@ -24,6 +24,44 @@ without a very good reason — this constraint is deliberate and has been
 maintained through several rounds of feature additions (a local delete/edit
 web UI included).
 
+## Where the data actually comes from (plain-language version)
+
+If the request/response mechanics further down are more detail than you
+need right now, here's the whole data flow in five sentences, no jargon:
+
+1. **Shopmetrics is a real company that runs a real website** where field
+   staff submit customer-survey results. That website — not this project —
+   is where the actual survey data permanently lives, on Shopmetrics' own
+   servers, at `https://training212.shopmetrics.com` by default.
+2. **This project does not generate, invent, or store any survey data of
+   its own.** It's a client that asks that website's API for a copy of
+   whatever's there — the same way a browser asks a website for a page,
+   except the answer is structured data instead of a rendered page.
+3. **The "Client ID" and "Client Secret" are a login** — proof to
+   Shopmetrics that whoever's asking is allowed to ask. Without a valid
+   one, Shopmetrics won't hand over anything (§ "Credentials & secrets"
+   below covers what these actually are and where to get them).
+4. **`ClientOrFormIDs` (default `-995`) says *which* company/brand's
+   surveys to ask for** — Shopmetrics hosts survey data for many different
+   companies, and this number scopes the request to one of them (see
+   "Which Shopmetrics account/scope actually gets scraped" below). Get this
+   wrong (or use a login without permission to see it) and you correctly
+   get *nothing back* — not an error, just an empty, honest answer.
+5. **Once Shopmetrics sends the data back, *that's* when it becomes local**
+   — `load.py` writes it into `data/etl.db` (a file that lives entirely on
+   this computer), and everything downstream (the dashboard, the terminal
+   views) reads *that local copy*, never the live site again until the next
+   `run`. This is also why the dashboard can be viewed offline, why
+   deleting a survey locally doesn't affect Shopmetrics, and why re-running
+   later only fetches what's new rather than starting over.
+
+If you remember one sentence: **the pipeline is a messenger, not a source
+— it can only show you what Shopmetrics is willing to hand to the specific
+login you gave it, for the specific company/scope you asked about.** Every
+"why don't I see the data I expected" question ultimately traces back to
+one of steps 3 or 4 above being wrong for the situation at hand, not to
+this codebase inventing or losing data.
+
 ## Quickstart — zero to scraping real surveys on a brand-new machine
 
 This is the exact, mechanical procedure. Follow it in order; every step
@@ -95,13 +133,39 @@ why re-running doesn't re-download from scratch).
 Bare `run.bat` then drops you into a numbered menu (§ "The interactive
 menu" below) — type `0` or `exit` to close it.
 
-**If you only see "Extracted 3 survey record(s)" instead of ~1800+:** that
-3 is the file-mode sample-data count (`data/sample_surveys.json` has
-exactly 3 records), meaning `EXTRACTION_MODE` resolved to `file`, not
-`api`, for this run — go straight to "Troubleshooting: why am I only
-getting 3 surveys" further down; don't assume the API integration is
-broken, because the far more likely cause is a stale override sitting in
-front of the (already-`api`) default.
+**Step 4 — Verify it actually worked. Do not skip this, especially if
+you're an AI agent running this unattended with no human watching the
+console.** "The command exited without an error" is *not* the same as "it
+scraped real data" — see the next paragraph for exactly why, and don't
+report success to whoever asked you to do this until you've confirmed it.
+Check the **`Extracted N survey record(s)`** line specifically (it's in
+both the console output and `logs/etl.log`) against these three cases,
+in order:
+
+- **N is a big number (hundreds/thousands)** → real data really was
+  scraped. This is success. Move on.
+- **N is exactly 3** → this ran in file mode (`data/sample_surveys.json`
+  has exactly 3 records), not against the live API — see the checklist
+  under "Troubleshooting: why am I only getting 3 surveys" below.
+- **N is 0** → the live API call itself succeeded (no error) but found
+  nothing. As of this pipeline's current version, this prints its own
+  loud warning right in the console explaining the two likely causes — but
+  if you're only reading a log after the fact, or the version you're
+  running predates that warning, go straight to "Troubleshooting: 0
+  surveys extracted" below. **Do not treat a successful-looking run with
+  `extracted=0` as "done" — it almost always means the credentials don't
+  have access to the configured client/scope, which is a real, fixable
+  problem, not a normal empty result.**
+
+If you generated `reports/dashboard<N>.html` and it shows 0 surveys, that
+by itself tells you *nothing* about whether the API worked — a dashboard
+regenerated from a database that was never populated (or from `manage.py
+dashboard`, which reads the *local* database and never touches the API at
+all) will always show 0, correctly, with no error anywhere. **A dashboard
+showing survey data is proof only that `run` (not just `dashboard`) was
+executed at some point and found something.** If you're verifying a setup,
+check the `Extracted N` line from an actual `run`, not just whether an
+HTML file exists.
 
 **Cross-platform (no `.bat` files):** every step above has a direct
 equivalent — `python -m venv .venv` + `pip install -r requirements.txt`
@@ -282,6 +346,76 @@ It should print `api`. If it prints `file`, work down the list above in
 order (1 through 5) until you find the layer that's setting it, starting
 with the environment-variable checks since those are the easiest to forget
 about and the highest precedence.
+
+### Troubleshooting: "0 surveys extracted" (this happened on a fresh machine once — read this)
+
+This is a *different* problem from the "3 surveys" one above, and easy to
+conflate with it because both look like "it's not getting real data." The
+distinguishing fact: **file mode (the wrong-mode problem) always extracts
+exactly 3** (the sample file's fixed record count) — it can never
+legitimately be 0. So if you're seeing 0, `EXTRACTION_MODE` almost
+certainly *did* resolve to `api` and the live call itself ran — the
+problem is downstream of that, not the mode. `etl.run()` now prints its
+own explanation the moment this happens (added specifically because this
+class of failure reached a real user on a machine that had never been
+debugged interactively before) — but here's the full diagnostic if you
+need more than that one message gives you:
+
+1. **Most likely: these credentials were never granted access to the
+   configured `ClientOrFormIDs`.** A Shopmetrics API user's visibility into
+   client/brand/form data is permission-scoped on the Shopmetrics side
+   (§10.2 of SPECIFICATION.md has the background on how restrictive this
+   can be) — a *freshly created* Client ID/Secret pair, even one that
+   authenticates perfectly (no error, a real token comes back), may simply
+   not have been given access to the specific client this project defaults
+   to (`-995`, "Delight Coffee (CX Analytics Demo)"). The query then runs
+   successfully and correctly returns zero rows, because as far as that API
+   user is concerned, there's nothing there to see. **This is not a bug in
+   this codebase — it's Shopmetrics enforcing permissions correctly** —
+   but it's also not something a human on a different machine should have
+   to debug blind, hence this whole section.
+
+   **The fix, mechanically:**
+   ```
+   run.bat browse clients
+   ```
+   Look for `-995` (or `Delight Coffee (CX Analytics Demo)`) in the printed
+   list. **If it's not there, these credentials cannot see it, full stop**
+   — no amount of retrying `run` will fix that. Two ways forward:
+   - Ask whoever administers the Shopmetrics site to grant this API user
+     access to that client (same admin screen credentials are created in —
+     Administration → Tools and Settings → Site Settings → Other → API v2
+     Authorization – Client Credentials), then retry `run`; or
+   - Point the pipeline at a client these credentials *do* have access to
+     instead: `run.bat set-client` (interactive picker over the same list
+     `browse clients` just showed you) or `run.bat run --client <id>` for
+     a one-off. Either way you'll then be scraping *that* client's real
+     data, not `-995`'s — which is the correct, working outcome if `-995`
+     was never actually available to these particular credentials.
+
+2. **Less likely, but check it:** every survey under the configured scope
+   is already marked opened *by this specific API user*. Unlike case 1,
+   this is a legitimate empty result, not a permissions problem — but it's
+   rare on anything that isn't a repeat run, because "opened" status is
+   tracked per API user (`IsSurveyInstanceViewedBySecurityUser`, scoped to
+   `SecurityObjectUserID`), so a *brand-new* API user has never opened
+   anything and should see the full backlog as "new," not zero. If
+   `browse clients` confirms the credentials genuinely can see `-995` and
+   you still get 0, this is the remaining explanation — not a bug to chase
+   further, just confirm it by running `run.bat browse surveys --client
+   -995` (without `--unopened-only`) and checking whether results come back
+   at all (if surveys exist but all show as already viewed, that's this
+   case exactly).
+
+3. **Rule out the obvious first, before either of the above:** confirm
+   `EXTRACTION_MODE` really did resolve to `api` (the diagnostic one-liner
+   from the section above), and confirm the credentials-verification step
+   printed `OK` and not a rejection — if credentials were flat-out wrong,
+   `ensure_api_credentials()` would have caught that *before* extraction
+   even started (§ "Credentials & secrets" below) and the run wouldn't have
+   reached an `Extracted N` line at all, so reaching "0" specifically means
+   auth already succeeded — cases 1 and 2 above are about *authorization*
+   (what this user can see), not *authentication* (who this user is).
 
 ### Which Shopmetrics account/scope actually gets scraped
 
@@ -527,11 +661,33 @@ Body (form field "post", value is this JSON *string*):
   "action": "exec",
   "dataset": {"datasetname": "/Apps/SM/APIv2/Query/ClientAnalytics/ClientAnalytics"},
   "parameters": [
-    {"name": "QuerySpecification", "value": "[InstanceID][Title][Loc ID][Location Name][Date][ScorePctXX.XX][SurveyStatusName][AttachmentsCount][Login][Shopper Name][WorkflowStepID][Campaign][IsSurveyInstanceViewedBySecurityUser][WHERE:IsSurveyInstanceViewedBySecurityUser|0][ORDERBY:Date|DESC]"},
+    {"name": "QuerySpecification", "value": "<api_client._SURVEY_LIST_FIELDS, see below>[WHERE:IsSurveyInstanceViewedBySecurityUser|0][ORDERBY:Date|DESC]"},
     {"name": "ClientOrFormIDs", "value": "-995"}
   ]
 }
 ```
+**`QuerySpecification` requests only the fields this project actually
+stores and uses** (`api_client._SURVEY_LIST_FIELDS`):
+`InstanceID`, `Title`, `Loc ID`, `Location Name`, `Date`, `ScorePctXX.XX`,
+`SurveyStatusName`, `AttachmentsCount`, `Login`, `Shopper Name`,
+`WorkflowStepID`, `Campaign`, `IsSurveyInstanceViewedBySecurityUser`. Each
+maps to a `surveys` column of the same name (see `schema.md`).
+
+The Client Analytics dataset offers many more fields than this (full
+location address, raw points, custom location properties, export/RFA/audit
+status flags — every one of them confirmed live against the real account,
+including a quirk where the 3 `CustLocationProperty001/002/003` fields come
+back keyed by whatever display name the target account has configured for
+them rather than the generic field code). A later pass queried and stored
+23 of these extra fields, then reverted it: nothing in this codebase
+(dashboard, view, `delete-surveys` filters) ever read any of them, so they
+were dropped again (`db/setup_db.py`'s `_REMOVED_SURVEY_COLUMNS`,
+`ALTER TABLE DROP COLUMN`) rather than left as dead weight. If a future
+feature genuinely needs one of those fields, add it back deliberately —
+`api_client._SURVEY_LIST_FIELDS` is one line to extend and the query is
+already proven to return them. See `SPECIFICATION.md` §2 and §5.1 for the
+full history.
+
 Response shape: `{"dataset": {"data": [[ {row1 fields...}, {row2 fields...}, ... ]]}}`
 — note the double nesting, `data` is a list containing one list of row
 objects (`api_client._execute_dataset` unwraps this to `response["dataset"]["data"][0]`).

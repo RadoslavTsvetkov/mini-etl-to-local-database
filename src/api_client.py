@@ -136,14 +136,25 @@ def list_client_or_form_ids() -> list[dict]:
     )
 
 
+# Only the fields this project actually stores and uses (surveys table
+# columns, dashboard, view, delete-surveys filters) -- see load.py's
+# _survey_values()/_INSERT_COLUMNS for the exact set this maps to. The
+# Client Analytics dataset offers many more fields (full location address,
+# raw points, custom properties, export/RFA/audit status flags -- see
+# SPECIFICATION.md section 2's history for the full list and why it was
+# tried and reverted); deliberately not requesting them keeps the query
+# lean and the schema free of columns nothing ever reads.
+_SURVEY_LIST_FIELDS = (
+    "[InstanceID][Title][Loc ID][Location Name][Date][ScorePctXX.XX]"
+    "[SurveyStatusName][AttachmentsCount][Login][Shopper Name][WorkflowStepID][Campaign]"
+    "[IsSurveyInstanceViewedBySecurityUser]"
+)
+
+
 def list_surveys(client_or_form_id: str, limit: int, unopened_only: bool = False) -> list[dict]:
     """Lists survey instances for a given ClientOrFormIDs value (APICA)."""
     where_clause = "[WHERE:IsSurveyInstanceViewedBySecurityUser|0]" if unopened_only else ""
-    query_spec = (
-        "[InstanceID][Title][Loc ID][Location Name][Date][ScorePctXX.XX]"
-        "[SurveyStatusName][AttachmentsCount][Login][Shopper Name][WorkflowStepID][Campaign]"
-        f"[IsSurveyInstanceViewedBySecurityUser]{where_clause}[ORDERBY:Date|DESC]"
-    )
+    query_spec = f"{_SURVEY_LIST_FIELDS}{where_clause}[ORDERBY:Date|DESC]"
     rows = _execute_dataset(
         config.CLIENT_ANALYTICS_DATASET,
         [

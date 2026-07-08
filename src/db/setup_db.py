@@ -28,12 +28,33 @@ _NEW_SURVEY_COLUMNS = [
     ("workflow_step_id", "INTEGER", "INT"),
 ]
 
+# Columns that were added in a later pass (to capture the full Client
+# Analytics field set) and then reverted -- nothing in this codebase
+# (dashboard, view, delete-surveys filters) ever actually read them, so
+# they were dropped again rather than left as dead NULL columns. Kept here
+# so any database that picked up the add-migration (this project's own
+# included) gets cleanly cleaned up too, via ALTER TABLE DROP COLUMN
+# (SQLite 3.35+ and SQL Server both support it) -- a database that never
+# had them just no-ops on each one.
+_REMOVED_SURVEY_COLUMNS = [
+    "location_address1", "location_address2", "location_city", "location_state",
+    "location_postal_code", "location_photo_url", "points", "points_of",
+    "custom_location_property_1", "custom_location_property_2", "custom_location_property_3",
+    "client_access_status_id", "rfa_status_id", "rfas_open", "rfas_closed",
+    "is_being_exported", "is_export_completed_but_failed", "is_ok_for_export",
+    "hold_export", "is_export_completed", "section_level1_weight_defined",
+    "client_audit_mode", "last_validated_at",
+]
+
 
 def _migrate_sqlite_columns(conn: sqlite3.Connection) -> None:
     existing = {row[1] for row in conn.execute("PRAGMA table_info(surveys)")}
     for name, sqlite_type, _ in _NEW_SURVEY_COLUMNS:
         if name not in existing:
             conn.execute(f"ALTER TABLE surveys ADD COLUMN {name} {sqlite_type}")
+    for name in _REMOVED_SURVEY_COLUMNS:
+        if name in existing:
+            conn.execute(f"ALTER TABLE surveys DROP COLUMN {name}")
     conn.commit()
 
 
@@ -42,6 +63,11 @@ def _migrate_sqlserver_columns(conn) -> None:
         conn.execute(
             f"IF COL_LENGTH('dbo.surveys', '{name}') IS NULL "
             f"ALTER TABLE dbo.surveys ADD {name} {sqlserver_type} NULL;"
+        )
+    for name in _REMOVED_SURVEY_COLUMNS:
+        conn.execute(
+            f"IF COL_LENGTH('dbo.surveys', '{name}') IS NOT NULL "
+            f"ALTER TABLE dbo.surveys DROP COLUMN {name};"
         )
     conn.commit()
 

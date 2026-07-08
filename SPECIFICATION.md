@@ -26,6 +26,7 @@ Everything below is taken from `_KNOWLEDGEBASE/023-APIs/`, not invented. Article
 | Extraction dataset | `/Apps/SM/APIv2/Query/ClientAnalytics/ClientAnalytics` — the Client Analytics query data model, restricted to surveys with "OK for Client Access" status. Requires a `QuerySpecification` field list plus at least one filter (we use `ClientOrFormIDs`). | APIICA, APICA |
 | "New" surveys | The field `IsSurveyInstanceViewedBySecurityUser` marks whether the survey has already been opened/viewed by the client user. We filter for unopened ones with `[WHERE:IsSurveyInstanceViewedBySecurityUser\|0]` in `QuerySpecification`, mirroring the KB's "List of NEW Survey Instances" example. | APICA |
 | Survey responses | A second call to the same dataset with `QuerySpecification: [InstanceID][QuestionID][ProtoAnswerText][Question Comment]`, filtered by `SurveyInstanceIDs` (CSV of IDs from the first call), returns the answer rows for those instances. | APICAUC |
+| Fields actually captured | `api_client._SURVEY_LIST_FIELDS` requests only the fields this project stores and uses: `InstanceID`, `Title`, `Loc ID`, `Location Name`, `Date`, `ScorePctXX.XX`, `SurveyStatusName`, `AttachmentsCount`, `Login`, `Shopper Name`, `WorkflowStepID`, `Campaign`, `IsSurveyInstanceViewedBySecurityUser`. The Client Analytics dataset offers many more fields (full location address, raw points, custom location properties, export/RFA/audit status flags — all confirmed live against the real account); a later pass queried and stored 23 of them, then reverted it because nothing in the codebase read them — see §5.1. Maps to `surveys` table columns in §5.1. | APICA, APICAUC |
 | Command API (REST-style, most v2 use cases) | `POST {base_url}/api/v2/command/<CommandName>` with a flat JSON body (e.g. `{"ImportData": ..., "ImportNote": ...}`). Returns a **Request ID** immediately; the actual change runs in the background. Status can be checked via the `/Apps/SM/APIv2/Query/DomainModel/WorkflowExecutions` query resource with `CommandRequestRecordID`. | APICMD |
 | Command *datasets* (older v2 convention) | Some commands — including the one we use for "mark opened" — are invoked as a **dataset**, through the exact same generic `POST {base_url}/api/v2/execute` endpoint the Query API uses (`{"post": "{\"action\":\"exec\",\"dataset\":{\"datasetname\":\"<path>\"},\"parameters\":[...]}"}`), not the dedicated REST command path. The response is `dataset.data.RequestUUID` (a single object, not a row array like queries). Status is checked via `/Apps/SM/APIv2/Query/CommandStatus/CommandStatusCheck` with `RequestUUID`, polling until `MainStatus == "Done"`. Don't assume the REST-style convention applies to every command — check the specific use-case article. | SIPB |
 | "Mark opened" | The API's actual, purpose-built command for this: `/Apps/SM/APIv2/Command/SurveyInstances/BulkProcessing_SetReadStatus`, called via the command-dataset convention above, with parameters `SurveyInstancesIDsCSV` (CSV of survey instance IDs) and `ReadStatus=1`. This is literally described as marking "the loaded survey instances with Opened Status 1... so that when the Query API is called again, only new surveys will be downloaded" — it flips the exact same `IsSurveyInstanceViewedBySecurityUser` field our extraction filters on, closing the extract→mark-opened loop precisely. This supersedes an earlier, incorrect implementation (see below). | SIPB |
@@ -285,7 +286,19 @@ Stores each extracted survey instance and its processing state. Field names foll
 
 Added after the initial release; `src/db/setup_db.py` migrates existing databases
 onto this schema automatically (`ALTER TABLE ADD COLUMN`), preserving
-previously-collected rows.
+previously-collected rows (existing rows get `NULL` in new columns rather
+than being retroactively re-fetched).
+
+The Client Analytics dataset offers many more fields than this table lists
+(full location address, raw points, custom location properties, export/RFA/
+audit status flags — see §2 for the fuller field inventory this project
+checked against the live API). A later pass queried and stored 23 of them,
+then reverted it: nothing in this codebase (dashboard, view, `delete-surveys`
+filters) ever read any of the extra columns, so they were dropped again
+(`db/setup_db.py`'s `_REMOVED_SURVEY_COLUMNS`, `ALTER TABLE DROP COLUMN`)
+rather than left as dead weight. If a future feature genuinely needs one of
+those fields, add it back deliberately — `api_client._SURVEY_LIST_FIELDS` is
+one line to extend and the query is already proven to return them.
 
 ### 5.2 `etl_runs` table
 
@@ -310,7 +323,7 @@ One row per pipeline execution — the durable record backing the log file.
 ### 6.1 Extract (`extract.py`)
 
 - `EXTRACTION_MODE=api` (**default**): calls `api_client.query_new_surveys()`, which:
-  1. Runs the `ClientAnalytics` dataset with `QuerySpecification` including `SurveyStatusName`, `AttachmentsCount`, `Login`, `Shopper Name`, `WorkflowStepID`, `Campaign`, `IsSurveyInstanceViewedBySecurityUser`, and `[WHERE:IsSurveyInstanceViewedBySecurityUser|0]`, filtered by `SHOPMETRICS_CLIENT_OR_FORM_IDS`.
+  1. Runs the `ClientAnalytics` dataset with `QuerySpecification` set to `api_client._SURVEY_LIST_FIELDS` (see §2's "Fields actually captured" row — only the fields this project stores and uses) and `[WHERE:IsSurveyInstanceViewedBySecurityUser|0]`, filtered by `SHOPMETRICS_CLIENT_OR_FORM_IDS`.
   2. Collects the returned `InstanceID`s and runs a second `ClientAnalytics` call with `QuerySpecification: [InstanceID][QuestionID][ProtoAnswerText][Question Comment]` filtered by `SurveyInstanceIDs` to get responses.
   3. Merges both into the same normalized record shape as file mode.
 - `EXTRACTION_MODE=file`: reads `data/sample_surveys.json` instead — no network, no credentials. Each record has at least `survey_id`, `client_or_form_id`, `survey_title`, `location_store_id`, `location_name`, `submitted_at`, `score`, `responses`.
