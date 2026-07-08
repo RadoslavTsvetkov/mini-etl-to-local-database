@@ -1,5 +1,4 @@
 @echo off
-setlocal
 
 set "VENV_PY=%~dp0.venv\Scripts\python.exe"
 
@@ -12,6 +11,25 @@ if not exist "%VENV_PY%" (
 )
 
 if not "%~1"=="" goto :passthrough
+
+rem Default (no-argument, double-click) flow only: relaunch inside a
+rem kept-open shell (cmd /k, not /c) before doing anything else. Whatever
+rem happens below -- a clean run, a failed run, an unopened browser, even a
+rem batch-level crash we didn't anticipate -- this outer shell only ever
+rem runs ONE command (the real script, via `call`) and then drops to its
+rem own interactive prompt instead of closing, so the window can never just
+rem vanish out from under you. Scripted use (`run.bat <command> ...` from
+rem an already-open terminal, handled by :passthrough below) is
+rem deliberately NOT wrapped this way -- it still exits cleanly when done.
+rem RUN_BAT_RELAUNCHED (a real environment variable, inherited by the child
+rem cmd /k) is the guard that stops this from relaunching itself forever.
+if defined RUN_BAT_RELAUNCHED goto :main
+set "RUN_BAT_RELAUNCHED=1"
+cmd /k call "%~f0"
+exit /b
+
+:main
+setlocal
 
 echo No command given -- scraping surveys from the live Shopmetrics API
 echo ^(read-only Query API; mark-opened stays mocked^). If credentials are

@@ -46,6 +46,12 @@ double-click (no arguments) shows the menu; running `run.bat <command>`
 from an already-open terminal behaves like any normal command and exits
 when it's done.
 
+The plain double-click window is deliberately hard to lose: after you exit
+the menu (or if anything goes wrong along the way), the window drops to a
+normal command prompt in this folder instead of closing itself — so it
+never just vanishes before you've had a chance to read what happened. Close
+it yourself (the `X` button, or type `exit`) whenever you're done.
+
 If you're not on Windows, or prefer running Python directly: every example
 below also works as `python src/manage.py <command> ...` from an activated
 virtual environment (see `requirements.txt` / `requirements-sqlserver.txt`
