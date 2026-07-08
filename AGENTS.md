@@ -85,13 +85,18 @@ a **Client ID** and a **Client Secret**. These are created in the
 Shopmetrics web UI at: **Administration → Tools and Settings → Site
 Settings → Other → API v2 Authorization – Client Credentials** (an admin
 user creates a "Create New" entry there and can auto-generate the secret).
-Nothing else is required — the site URL (`https://training212.shopmetrics.com`)
-and the client/account scope (`ClientOrFormIDs=-995`) are already the
-checked-in defaults in `config/config.json`, matching the account this
-project has been built and tested against ("Delight Coffee (CX Analytics
-Demo)"). If you're pointing this at a *different* Shopmetrics site or
-account, change `SHOPMETRICS_BASE_URL` in `config/config.json`, then use
-`manage.py set-client` (interactive: lists every scope your credentials
+For the exact account this project has been built and tested against
+("Delight Coffee (CX Analytics Demo)" on `training212.shopmetrics.com`),
+nothing else is required — the site URL and the client/account scope
+(`ClientOrFormIDs=-995`) are already the checked-in defaults in
+`config/config.json`. If you're pointing this at a *different* Shopmetrics
+site, account, or a freshly-created Client ID/Secret, **the credential
+having valid login power is not the same as it being allowed to see any
+survey data** — see "What permissions does the Shopmetrics account behind
+a credential actually need?" below *before* assuming a working credential
+is broken just because it returns nothing. Once you know it can see the
+scope you want, change `SHOPMETRICS_BASE_URL` in `config/config.json`, then
+use `manage.py set-client` (interactive: lists every scope your credentials
 can see and saves your pick) or `manage.py run --client <id>` (one-off)
 rather than hand-editing `SHOPMETRICS_CLIENT_OR_FORM_IDS` — see "Which
 Shopmetrics account/scope actually gets scraped" below.
@@ -363,17 +368,18 @@ need more than that one message gives you:
 
 1. **Most likely: these credentials were never granted access to the
    configured `ClientOrFormIDs`.** A Shopmetrics API user's visibility into
-   client/brand/form data is permission-scoped on the Shopmetrics side
-   (§10.2 of SPECIFICATION.md has the background on how restrictive this
-   can be) — a *freshly created* Client ID/Secret pair, even one that
-   authenticates perfectly (no error, a real token comes back), may simply
-   not have been given access to the specific client this project defaults
-   to (`-995`, "Delight Coffee (CX Analytics Demo)"). The query then runs
-   successfully and correctly returns zero rows, because as far as that API
-   user is concerned, there's nothing there to see. **This is not a bug in
-   this codebase — it's Shopmetrics enforcing permissions correctly** —
-   but it's also not something a human on a different machine should have
-   to debug blind, hence this whole section.
+   client/brand/form data is permission-scoped on the Shopmetrics side (see
+   "What permissions does the Shopmetrics account behind a credential
+   actually need?" below for the exact mechanism and where it's configured)
+   — a *freshly created* Client ID/Secret pair, even one that authenticates
+   perfectly (no error, a real token comes back), may simply not have been
+   given access to the specific client this project defaults to (`-995`,
+   "Delight Coffee (CX Analytics Demo)"). The query then runs successfully
+   and correctly returns zero rows, because as far as that API user is
+   concerned, there's nothing there to see. **This is not a bug in this
+   codebase — it's Shopmetrics enforcing permissions correctly** — but it's
+   also not something a human on a different machine should have to debug
+   blind, hence this whole section.
 
    **The fix, mechanically:**
    ```
@@ -416,6 +422,66 @@ need more than that one message gives you:
    reached an `Extracted N` line at all, so reaching "0" specifically means
    auth already succeeded — cases 1 and 2 above are about *authorization*
    (what this user can see), not *authentication* (who this user is).
+
+### What permissions does the Shopmetrics account behind a credential actually need?
+
+This is the piece that's easy to miss: **an API v2 Client ID/Secret has no
+permissions of its own.** Every credential is created *associated with* a
+specific Shopmetrics user account (the "Shopmetrics User Login" field on
+the credential-creation screen), and it can only ever see what that
+underlying user account is allowed to see — a token request can succeed
+(proving the credential is real and enabled) while every actual query
+still comes back empty, because the *user* behind it was never granted
+access to any client's data. That combination — auth OK, zero data — is
+exactly what "Troubleshooting: 0 surveys extracted" above walks through;
+this section is the *why*, sourced from the KB rather than inferred.
+
+**The three things the underlying user account needs, per
+`_KNOWLEDGEBASE\023-APIs\005-API v2\004-Integration Examples\002-Granting
+Access for Shopmetrics API Consumption\article.md` (code **APIECU**):**
+
+1. Membership in the **"Client User"** security role.
+2. Membership in the **"Myst.ClientAccess.API"** security group — this
+   specifically is what turns on API access at all; without it, nothing
+   below matters.
+3. **Client Access permission set to "View"** (or "Edit") **for every
+   individual client** the credential should be able to query. This is the
+   per-`ClientOrFormIDs` granularity: it's not one on/off switch for "API
+   access to everything," it's a separate grant *per client*, so a user can
+   legitimately have API access in general while still seeing zero clients
+   because none of them were individually checked off.
+
+**Where that's configured (per the same article, and confirmed by
+`_KNOWLEDGEBASE\023-APIs\005-API v2\002-Query APIs\002-Query Data
+Models\006-Security\005-Project Access Policies Query Resource\article.md`):
+Administration → Security → Clients/Locations tab → open a specific client
+→ the "Client Policies" table → a "CLIENT ACCESS" dropdown per user, with
+values `NoAccess` / `View` / `Edit`.** That dropdown, set per user and per
+client, is the literal switch. (It can also be set programmatically via the
+`ImportClientPolicies` Command API's `ClientAccess` field — see
+`_KNOWLEDGEBASE\023-APIs\004-API v3\003-Command APIs\004-Use Case_Import
+Project Access Policies via\article.md`, code **APIPAP** — useful if a
+Shopmetrics admin wants to script granting access to many clients at once
+rather than clicking through each one.)
+
+**Separately, per `_KNOWLEDGEBASE\023-APIs\002-API Authorization\article.md`
+(code **APIAUT**), the user account itself "should have a Restricted
+security role"** (its own note points to a "Grant Restricted Access to the
+System" article, short code **GRAS** — referenced by name from many
+articles in this KB but its actual content isn't included in this
+knowledgebase snapshot, so treat "Restricted role" as a real requirement
+confirmed by APIAUT even though the how-to-configure-it detail isn't
+available locally).
+
+**Practically, this means:** if `run.bat browse clients` (or `manage.py
+set-client`) comes back with fewer clients than expected — or none at all,
+as happened in one real case — that's not this codebase malfunctioning and
+not something retrying `run` will fix. It means the Shopmetrics user behind
+those credentials needs a Shopmetrics admin to open **Administration →
+Security → Clients/Locations**, find that user, and set **Client Access →
+View** for the specific client(s) this project should scrape. There is no
+client-side workaround — the API is correctly enforcing a permission that
+lives entirely on the Shopmetrics side.
 
 ### Which Shopmetrics account/scope actually gets scraped
 
